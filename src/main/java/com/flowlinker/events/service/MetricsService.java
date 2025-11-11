@@ -1,6 +1,9 @@
 package com.flowlinker.events.service;
 
 import com.flowlinker.events.projection.activity.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -13,10 +16,10 @@ import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
-
-
 @Service
 public class MetricsService {
+
+	private static final Logger log = LoggerFactory.getLogger(MetricsService.class);
 
 	private final MongoTemplate mongoTemplate;
 
@@ -30,7 +33,7 @@ public class MetricsService {
 		long actions = countShareBatch(customerId, from, to);
 		long errors = countActivityErrors(customerId, from, to);
 		double errorRate = (actions + errors) == 0 ? 0.0 : (errors * 100.0) / (actions + errors);
-		long peopleReached = sumGroupMembers(customerId, from, to);
+		long peopleReached = peopleReachedApprox(range, customerId);
 		long activePersonas = countActivePersonas(customerId, from, to);
 		Map<String, Object> map = new LinkedHashMap<>();
 		map.put("totalActions", actions);
@@ -40,23 +43,169 @@ public class MetricsService {
 		return map;
 	}
 
-	public List<Map<String, Object>> recentActivities(String customerId, int limit) {
+	public Map<String, Long> actionsSummary(DurationRange range, String customerId) {
+		Instant from = range.from();
+		Instant to = range.to();
+		long shares = 0;
+		long extractions = 0;
+		try {
+			shares = countShareBatch(customerId, from, to);
+		} catch (DataAccessException e) {
+			log.warn("Falha ao contar shares", e);
+		}
+		try {
+			extractions = mongoTemplate.count(timeRangeCustomer(customerId, from, to), com.flowlinker.events.projection.campaign.CampaignStartedDocument.class);
+		} catch (DataAccessException e) {
+			log.warn("Falha ao contar extractions", e);
+		}
+		long instagramLikes = 0;
+		long instagramComments = 0;
+		long total = shares + extractions + instagramLikes + instagramComments;
+		Map<String, Long> out = new LinkedHashMap<>();
+		out.put("shares", shares);
+		out.put("extractions", extractions);
+		out.put("instagramLikes", instagramLikes);
+		out.put("instagramComments", instagramComments);
+		out.put("total", total);
+		return out;
+	}
+
+	public List<Map<String, Object>> recentActivities(String customerId, int limit, String zoneId) {
 		List<Map<String, Object>> items = new ArrayList<>();
-		// share_batch
-		Query qs = Query.query(Criteria.where("customerId").is(customerId))
-			.with(Sort.by(Sort.Direction.DESC, "eventAt")).limit(limit);
-		for (ActivityShareBatchDocument d : mongoTemplate.find(qs, ActivityShareBatchDocument.class)) {
-			items.add(activityItem(d.getEventAt(), d.getAccount(), "compartilhou " + safeInt(d.getCount()) + " publicações no " + toLower(d.getPlatform())));
+		ZoneId zone = safeZone(zoneId);
+
+		findLatest(customerId, ActivityShareBatchDocument.class).ifPresent(d ->
+			items.add(activityItem(d.getEventAt(), zone, d.getAccount(),
+				"compartilhou " + safeInt(d.getCount()) + " publicações no " + toLower(d.getPlatform()))));
+
+		findLatest(customerId, com.flowlinker.events.projection.security.SecurityLoginSuccessDocument.class).ifPresent(d ->
+			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), "fez login com sucesso")));
+
+		findLatest(customerId, com.flowlinker.events.projection.security.SecurityLoginFailedDocument.class).ifPresent(d -> {
+			String reason = d.getReason() != null ? d.getReason().toLowerCase(Locale.ROOT).replace('_', ' ') : "desconhecida";
+			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), "falha de login: " + reason));
+		});
+
+		findLatest(customerId, ActivityErrorDocument.class).ifPresent(d ->
+			items.add(activityItem(d.getEventAt(), zone, null, "Falha: " + nullToEmpty(d.getMessage()))));
+
+		findLatest(customerId, ActivitySessionStartedDocument.class).ifPresent(d ->
+			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), "iniciou nova sessão")));
+
+		findLatest(customerId, ActivitySessionEndedDocument.class).ifPresent(d -> {
+			String reason = nullToEmpty(d.getReason());
+			String text = reason.isBlank() ? "encerrou sessão" : "encerrou sessão (" + reason + ")";
+			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), text));
+		});
+
+		findLatest(customerId, ActivityAccountCreatedDocument.class).ifPresent(d ->
+			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), "criou conta/perfil")));
+
+		findLatest(customerId, ActivityExtractionStartedDocument.class).ifPresent(d -> {
+			String keywords = nullToEmpty(d.getKeywords());
+			items.add(extractionItem("started", d.getEventAt(), zone,
+				"Extração Iniciada - Keywords: " + keywords,
+				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
+		});
+
+		findLatest(customerId, ActivityExtractionPausedDocument.class).ifPresent(d -> {
+			String keywords = nullToEmpty(d.getKeywords());
+			String text = String.format("Extração Pausada - %d grupos, %d pessoas (keywords: %s)",
+				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers()), keywords);
+			items.add(extractionItem("paused", d.getEventAt(), zone, text,
+				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
+		});
+
+		findLatest(customerId, ActivityExtractionCancelledDocument.class).ifPresent(d -> {
+			String keywords = nullToEmpty(d.getKeywords());
+			String text = String.format("Extração Cancelada - %d grupos processados (keywords: %s)",
+				safeLong(d.getTotalGroups()), keywords);
+			items.add(extractionItem("cancelled", d.getEventAt(), zone, text,
+				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
+		});
+
+		findLatest(customerId, ActivityExtractionCompletedDocument.class).ifPresent(d -> {
+			String keywords = nullToEmpty(d.getKeywords());
+			String text = String.format("Extração Finalizada - %d grupos, %d pessoas (keywords: %s)",
+				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers()), keywords);
+			items.add(extractionItem("completed", d.getEventAt(), zone, text,
+				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
+		});
+
+		return items.stream()
+			.filter(Objects::nonNull)
+			.sorted(Comparator.comparing((Map<String, Object> m) -> (Instant) m.get("eventAt")).reversed())
+			.limit(limit)
+			.collect(Collectors.toList());
+	}
+
+	private <T> Optional<T> findLatest(String customerId, Class<T> type) {
+		try {
+			Query q = Query.query(Criteria.where("customerId").is(customerId))
+				.with(Sort.by(Sort.Direction.DESC, "eventAt")).limit(1);
+			return Optional.ofNullable(mongoTemplate.findOne(q, type));
+		} catch (DataAccessException e) {
+			log.warn("Falha ao consultar mais recente de {}", type.getSimpleName(), e);
+			return Optional.empty();
 		}
-		// errors
-		for (ActivityErrorDocument d : mongoTemplate.find(qs, ActivityErrorDocument.class)) {
-			items.add(activityItem(d.getEventAt(), null, "Falha: " + nullToEmpty(d.getMessage())));
+	}
+
+	public List<Map<String, Object>> listAccountCreated(String customerId, int limit, String zoneId) {
+		ZoneId zone = safeZone(zoneId);
+		List<Map<String, Object>> items = new ArrayList<>();
+		try {
+			Query qs = Query.query(Criteria.where("customerId").is(customerId))
+				.with(Sort.by(Sort.Direction.DESC, "eventAt")).limit(limit);
+			for (ActivityAccountCreatedDocument d : mongoTemplate.find(qs, ActivityAccountCreatedDocument.class)) {
+				Map<String, Object> m = new LinkedHashMap<>();
+				m.put("eventId", d.getEventId());
+				m.put("eventAt", d.getEventAt());
+				m.put("eventAtLocal", d.getEventAt().atZone(zone).toString());
+				m.put("zone", zone.getId());
+				m.put("customerId", d.getCustomerId());
+				m.put("deviceId", d.getDeviceId());
+				m.put("ip", d.getIp());
+				m.put("platform", d.getPlatform());
+				m.put("account", d.getAccount());
+				m.put("profileName", d.getProfileName());
+				items.add(m);
+			}
+		} catch (DataAccessException e) {
+			log.warn("Falha ao consultar account_created", e);
 		}
-		// session started
-		for (ActivitySessionStartedDocument d : mongoTemplate.find(qs, ActivitySessionStartedDocument.class)) {
-			items.add(activityItem(d.getEventAt(), d.getAccount(), "iniciou nova sessão"));
+		return items;
+	}
+
+	public List<Map<String, Object>> extractionEvents(String customerId, int limit, String zoneId) {
+		ZoneId zone = safeZone(zoneId);
+		List<Map<String, Object>> items = new ArrayList<>();
+		try {
+			Query base = Query.query(Criteria.where("customerId").is(customerId))
+				.with(Sort.by(Sort.Direction.DESC, "eventAt")).limit(limit);
+
+			for (ActivityExtractionStartedDocument d : mongoTemplate.find(base, ActivityExtractionStartedDocument.class)) {
+				String keywords = nullToEmpty(d.getKeywords());
+				String text = "Extração Iniciada - Keywords: " + keywords;
+				items.add(extractionItem("started", d.getEventAt(), zone, text, safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
+			}
+			for (ActivityExtractionPausedDocument d : mongoTemplate.find(base, ActivityExtractionPausedDocument.class)) {
+				String keywords = nullToEmpty(d.getKeywords());
+				String text = String.format("Extração Pausada - %d grupos, %d pessoas (keywords: %s)", safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers()), keywords);
+				items.add(extractionItem("paused", d.getEventAt(), zone, text, safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
+			}
+			for (ActivityExtractionCancelledDocument d : mongoTemplate.find(base, ActivityExtractionCancelledDocument.class)) {
+				String keywords = nullToEmpty(d.getKeywords());
+				String text = String.format("Extração Cancelada - %d grupos processados (keywords: %s)", safeLong(d.getTotalGroups()), keywords);
+				items.add(extractionItem("cancelled", d.getEventAt(), zone, text, safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
+			}
+			for (ActivityExtractionCompletedDocument d : mongoTemplate.find(base, ActivityExtractionCompletedDocument.class)) {
+				String keywords = nullToEmpty(d.getKeywords());
+				String text = String.format("Extração Finalizada - %d grupos, %d pessoas (keywords: %s)", safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers()), keywords);
+				items.add(extractionItem("completed", d.getEventAt(), zone, text, safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
+			}
+		} catch (DataAccessException e) {
+			log.warn("Falha ao consultar eventos de extração", e);
 		}
-		// Ordena e corta
 		return items.stream()
 			.sorted(Comparator.comparing((Map<String, Object> m) -> (Instant) m.get("eventAt")).reversed())
 			.limit(limit)
@@ -105,10 +254,10 @@ public class MetricsService {
 		Query q = Query.query(Criteria.where("customerId").is(customerId)
 			.and("eventAt").gte(start.toInstant()).lte(now.toInstant()));
 		List<ActivityShareBatchDocument> list = mongoTemplate.find(q, ActivityShareBatchDocument.class);
-		int[][] matrix = new int[7][24]; // 0=Mon...6=Sun
+		int[][] matrix = new int[7][24];
 		for (ActivityShareBatchDocument d : list) {
 			ZonedDateTime z = d.getEventAt().atZone(now.getZone());
-			int dow = (z.getDayOfWeek().getValue() % 7); // Mon=1..Sun=7 -> 0..6
+			int dow = z.getDayOfWeek().getValue() % 7;
 			int h = z.getHour();
 			matrix[dow][h] += 1;
 		}
@@ -116,7 +265,7 @@ public class MetricsService {
 		for (int dow = 0; dow < 7; dow++) {
 			for (int h = 0; h < 24; h++) {
 				Map<String, Object> cell = new LinkedHashMap<>();
-				cell.put("dayOfWeek", dow); // 0..6
+				cell.put("dayOfWeek", dow);
 				cell.put("hour", h);
 				cell.put("count", matrix[dow][h]);
 				out.add(cell);
@@ -146,58 +295,144 @@ public class MetricsService {
 			.collect(Collectors.toList());
 	}
 
-	// Auxiliares
 	private long countShareBatch(String customerId, Instant from, Instant to) {
-		return mongoTemplate.count(timeRangeCustomer(customerId, from, to), ActivityShareBatchDocument.class);
+		try {
+			return mongoTemplate.count(timeRangeCustomer(customerId, from, to), ActivityShareBatchDocument.class);
+		} catch (DataAccessException e) {
+			log.warn("Falha ao contar ActivityShareBatch", e);
+			return 0;
+		}
 	}
+
 	private long countActivityErrors(String customerId, Instant from, Instant to) {
-		return mongoTemplate.count(timeRangeCustomer(customerId, from, to), ActivityErrorDocument.class);
+		try {
+			return mongoTemplate.count(timeRangeCustomer(customerId, from, to), ActivityErrorDocument.class);
+		} catch (DataAccessException e) {
+			log.warn("Falha ao contar ActivityError", e);
+			return 0;
+		}
 	}
-	private long sumGroupMembers(String customerId, Instant from, Instant to) {
-		Query q = timeRangeCustomer(customerId, from, to);
-		List<ActivityShareBatchDocument> list = mongoTemplate.find(q, ActivityShareBatchDocument.class);
-		long sum = 0;
+
+	public long peopleReachedApprox(DurationRange range, String customerId) {
+		Instant from = range.from();
+		Instant to = range.to();
+		List<ActivityShareBatchDocument> list = Collections.emptyList();
+		try {
+			Query q = timeRangeCustomer(customerId, from, to).with(Sort.by(Sort.Direction.DESC, "eventAt"));
+			list = mongoTemplate.find(q, ActivityShareBatchDocument.class);
+		} catch (DataAccessException e) {
+			log.warn("Falha ao calcular peopleReached", e);
+		}
+		Map<String, ActivityShareBatchDocument> latestPerGroup = new HashMap<>();
 		for (ActivityShareBatchDocument d : list) {
-			sum += parseLongSafe(d.getGroupMembers());
+			String key = Optional.ofNullable(d.getGroupUrl()).filter(s -> !s.isBlank())
+				.orElse(Optional.ofNullable(d.getGroupName()).orElse(""));
+			if (key.isBlank()) {
+				continue;
+			}
+			latestPerGroup.putIfAbsent(key, d);
+		}
+		long sum = 0;
+		for (ActivityShareBatchDocument d : latestPerGroup.values()) {
+			long members = parseLongSafe(d.getGroupMembers());
+			long reached = Math.round(members * 0.30d);
+			sum += reached;
 		}
 		return sum;
 	}
+
 	private long countActivePersonas(String customerId, Instant from, Instant to) {
-		Query q1 = timeRangeCustomer(customerId, from, to);
-		List<ActivitySessionStartedDocument> started = mongoTemplate.find(q1, ActivitySessionStartedDocument.class);
-		List<ActivityShareBatchDocument> shares = mongoTemplate.find(q1, ActivityShareBatchDocument.class);
+		Query q = timeRangeCustomer(customerId, from, to);
+		List<ActivitySessionStartedDocument> started = mongoTemplate.find(q, ActivitySessionStartedDocument.class);
+		List<ActivityShareBatchDocument> shares = mongoTemplate.find(q, ActivityShareBatchDocument.class);
 		Set<String> accounts = new HashSet<>();
 		started.forEach(s -> { if (s.getAccount() != null) accounts.add(s.getAccount()); });
 		shares.forEach(s -> { if (s.getAccount() != null) accounts.add(s.getAccount()); });
 		return accounts.size();
 	}
+
 	private Query timeRangeCustomer(String customerId, Instant from, Instant to) {
 		return Query.query(Criteria.where("customerId").is(customerId).and("eventAt").gte(from).lte(to));
 	}
-	private Map<String, Object> activityItem(Instant ts, String actor, String text) {
+
+	private Map<String, Object> activityItem(Instant ts, ZoneId zone, String actor, String text) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("eventAt", ts);
+		m.put("eventAtLocal", ts.atZone(zone).toString());
+		m.put("zone", zone.getId());
 		m.put("actor", actor);
 		m.put("text", text);
 		return m;
 	}
+
+	private Map<String, Object> extractionItem(String type, Instant ts, ZoneId zone, String text, long total, long members) {
+		Map<String, Object> m = new LinkedHashMap<>();
+		m.put("type", type);
+		m.put("eventAt", ts);
+		m.put("eventAtLocal", ts.atZone(zone).toString());
+		m.put("zone", zone.getId());
+		m.put("text", text);
+		m.put("totalGroups", total);
+		m.put("totalMembers", members);
+		return m;
+	}
+
 	private String formatDay(Instant instant, ZoneId zoneId) {
 		return instant.atZone(zoneId).toLocalDate().toString();
 	}
-	private String toLower(String s) { return s == null ? "" : s.toLowerCase(Locale.ROOT); }
-	private String nullToEmpty(String s) { return s == null ? "" : s; }
-	private int safeInt(Integer i) { return i == null ? 0 : i; }
+
+	private String toLower(String s) {
+		return s == null ? "" : s.toLowerCase(Locale.ROOT);
+	}
+
+	private String nullToEmpty(String s) {
+		return s == null ? "" : s;
+	}
+
+	private int safeInt(Integer i) {
+		return i == null ? 0 : i;
+	}
+
+	private long safeLong(Number n) {
+		return n == null ? 0L : n.longValue();
+	}
+
+	private ZoneId safeZone(String zoneId) {
+		try {
+			return ZoneId.of(zoneId);
+		} catch (Exception e) {
+			return ZoneId.systemDefault();
+		}
+	}
+
 	private long parseLongSafe(String s) {
-		if (s == null || s.isBlank()) return 0;
-		try { return Long.parseLong(s.replaceAll("\\D", "")); } catch (Exception e) { return 0; }
+		if (s == null || s.isBlank()) {
+			return 0;
+		}
+		try {
+			return Long.parseLong(s.replaceAll("\\D", ""));
+		} catch (Exception e) {
+			return 0;
+		}
 	}
 
 	public static class DurationRange {
 		private final Instant from;
 		private final Instant to;
-		public DurationRange(Instant from, Instant to) { this.from = from; this.to = to; }
-		public Instant from() { return from; }
-		public Instant to() { return to; }
+
+		public DurationRange(Instant from, Instant to) {
+			this.from = from;
+			this.to = to;
+		}
+
+		public Instant from() {
+			return from;
+		}
+
+		public Instant to() {
+			return to;
+		}
+
 		public static DurationRange lastHours(int hours) {
 			Instant to = Instant.now();
 			Instant from = to.minusSeconds(hours * 3600L);

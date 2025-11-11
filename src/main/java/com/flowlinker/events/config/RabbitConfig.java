@@ -48,22 +48,22 @@ public class RabbitConfig {
 
 	@Bean
 	public Binding bindActivityDesktop(@Qualifier("activityQueue") Queue activityQueue, TopicExchange eventsExchange) {
-		return BindingBuilder.bind(activityQueue).to(eventsExchange).with("desktop.activity.*");
+		return BindingBuilder.bind(activityQueue).to(eventsExchange).with("desktop.activity.#");
 	}
 
 	@Bean
 	public Binding bindActivityFacebook(@Qualifier("activityQueue") Queue activityQueue, TopicExchange eventsExchange) {
-		return BindingBuilder.bind(activityQueue).to(eventsExchange).with("facebook.activity.*");
+		return BindingBuilder.bind(activityQueue).to(eventsExchange).with("facebook.activity.#");
 	}
 
 	@Bean
 	public Binding bindCampaignFacebook(@Qualifier("campaignQueue") Queue campaignQueue, TopicExchange eventsExchange) {
-		return BindingBuilder.bind(campaignQueue).to(eventsExchange).with("facebook.campaign.*");
+		return BindingBuilder.bind(campaignQueue).to(eventsExchange).with("facebook.campaign.#");
 	}
 
 	@Bean
 	public Binding bindSecurityDesktop(@Qualifier("securityQueue") Queue securityQueue, TopicExchange eventsExchange) {
-		return BindingBuilder.bind(securityQueue).to(eventsExchange).with("desktop.security.*");
+		return BindingBuilder.bind(securityQueue).to(eventsExchange).with("desktop.security.#");
 	}
 
 	@Bean

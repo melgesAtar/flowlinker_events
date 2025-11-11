@@ -34,5 +34,6 @@ logging:
     org.springframework.amqp: INFO
     org.springframework.data.mongodb: INFO
     com.flowlinker.events: DEBUG
+    org.springframework.web.filter.CommonsRequestLoggingFilter: DEBUG
 
 

@@ -15,6 +15,14 @@ import com.flowlinker.events.projection.security.SecurityLoginFailedDocument;
 import com.flowlinker.events.projection.security.SecurityLoginFailedRepository;
 import com.flowlinker.events.projection.security.SecurityLoginSuccessDocument;
 import com.flowlinker.events.projection.security.SecurityLoginSuccessRepository;
+import com.flowlinker.events.projection.activity.ActivityExtractionStartedRepository;
+import com.flowlinker.events.projection.activity.ActivityExtractionStartedDocument;
+import com.flowlinker.events.projection.activity.ActivityExtractionPausedRepository;
+import com.flowlinker.events.projection.activity.ActivityExtractionPausedDocument;
+import com.flowlinker.events.projection.activity.ActivityExtractionCancelledRepository;
+import com.flowlinker.events.projection.activity.ActivityExtractionCancelledDocument;
+import com.flowlinker.events.projection.activity.ActivityExtractionCompletedRepository;
+import com.flowlinker.events.projection.activity.ActivityExtractionCompletedDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -37,6 +45,10 @@ public class EventConsumerService {
 	private final ActivityAccountUpdatedRepository activityAccountUpdatedRepository;
 	private final ActivityShareBatchRepository activityShareBatchRepository;
 	private final ActivityErrorRepository activityErrorRepository;
+	private final ActivityExtractionStartedRepository activityExtractionStartedRepository;
+	private final ActivityExtractionPausedRepository activityExtractionPausedRepository;
+	private final ActivityExtractionCancelledRepository activityExtractionCancelledRepository;
+	private final ActivityExtractionCompletedRepository activityExtractionCompletedRepository;
 	private final CampaignStartedRepository campaignStartedRepository;
 	private final CampaignProgressRepository campaignProgressRepository;
 	private final CampaignCompletedRepository campaignCompletedRepository;
@@ -51,6 +63,10 @@ public class EventConsumerService {
 		ActivityAccountUpdatedRepository activityAccountUpdatedRepository,
 		ActivityShareBatchRepository activityShareBatchRepository,
 		ActivityErrorRepository activityErrorRepository,
+		ActivityExtractionStartedRepository activityExtractionStartedRepository,
+		ActivityExtractionPausedRepository activityExtractionPausedRepository,
+		ActivityExtractionCancelledRepository activityExtractionCancelledRepository,
+		ActivityExtractionCompletedRepository activityExtractionCompletedRepository,
 		CampaignStartedRepository campaignStartedRepository,
 		CampaignProgressRepository campaignProgressRepository,
 		CampaignCompletedRepository campaignCompletedRepository
@@ -64,6 +80,10 @@ public class EventConsumerService {
 		this.activityAccountUpdatedRepository = activityAccountUpdatedRepository;
 		this.activityShareBatchRepository = activityShareBatchRepository;
 		this.activityErrorRepository = activityErrorRepository;
+		this.activityExtractionStartedRepository = activityExtractionStartedRepository;
+		this.activityExtractionPausedRepository = activityExtractionPausedRepository;
+		this.activityExtractionCancelledRepository = activityExtractionCancelledRepository;
+		this.activityExtractionCompletedRepository = activityExtractionCompletedRepository;
 		this.campaignStartedRepository = campaignStartedRepository;
 		this.campaignProgressRepository = campaignProgressRepository;
 		this.campaignCompletedRepository = campaignCompletedRepository;
@@ -71,20 +91,34 @@ public class EventConsumerService {
 
 	@RabbitListener(queues = RabbitConfig.QUEUE_ACTIVITY)
 	public void onActivity(EnrichedEventDTO event) {
+		log.info("EVENTO RECEBIDO - fila=activity type={} customerId={} eventId={}",
+			event.getEventType(), event.getCustomerId(), event.getEventId());
 		handle(event);
 	}
 
 	@RabbitListener(queues = RabbitConfig.QUEUE_CAMPAIGN)
 	public void onCampaign(EnrichedEventDTO event) {
+		log.info("EVENTO RECEBIDO - fila=campaign type={} customerId={} eventId={}",
+			event.getEventType(), event.getCustomerId(), event.getEventId());
 		handle(event);
 	}
 
 	@RabbitListener(queues = RabbitConfig.QUEUE_SECURITY)
 	public void onSecurity(EnrichedEventDTO event) {
+		log.info("EVENTO RECEBIDO - fila=security type={} customerId={} eventId={}",
+			event.getEventType(), event.getCustomerId(), event.getEventId());
 		handle(event);
 	}
 
 	private void handle(EnrichedEventDTO e) {
+		// Log estruturado da solicitação de ingestão (antes de persistir/projetar)
+		Map<String, Object> p0 = e.getPayload();
+		String account0 = p0 == null ? null : s(p0.get("account"));
+		String platform0 = p0 == null ? null : s(p0.get("platform"));
+		if (platform0 == null && p0 != null) platform0 = s(p0.get("source"));
+		log.info("INGEST REQUEST: type={} customerId={} deviceId={} ip={} account={} platform={} eventId={}",
+			e.getEventType(), e.getCustomerId(), e.getDeviceId(), e.getIp(), account0, platform0, e.getEventId());
+
 		// Persiste sempre o evento bruto para trilha completa
 		try {
 			eventRepository.save(toDocument(e));
@@ -146,20 +180,60 @@ public class EventConsumerService {
 			d.setAccount(s(p.get("account")));
 			d.setReason(s(p.get("reason")));
 			saveIgnoreDup(new SaveOp() { public void run() { activitySessionEndedRepository.save(d); } });
-		} else if ("facebook.activity.account_created".equals(type)) {
+		} else if ("facebook.activity.account_created".equals(type)
+				|| "activity_account_created".equals(type)
+				|| "desktop.activity.account_created".equals(type)
+				|| "desktop.activity.account.created".equals(type)) {
 			ActivityAccountCreatedDocument d = new ActivityAccountCreatedDocument();
 			fillMeta(d, e);
-			d.setPlatform(s(p.get("platform")));
+			// tenta platform, senão usa source para manter compatibilidade com o desktop
+			String platform = s(p.get("platform"));
+			if (platform == null) platform = s(p.get("source"));
+			d.setPlatform(platform);
 			d.setAccount(s(p.get("account")));
 			d.setProfileName(s(p.get("profileName")));
 			saveIgnoreDup(new SaveOp() { public void run() { activityAccountCreatedRepository.save(d); } });
-		} else if ("facebook.activity.account_updated".equals(type)) {
+		} else if ("facebook.activity.account_updated".equals(type)
+				|| "desktop.activity.account_updated".equals(type)
+				|| "desktop.activity.account.updated".equals(type)) {
 			ActivityAccountUpdatedDocument d = new ActivityAccountUpdatedDocument();
 			fillMeta(d, e);
 			d.setPlatform(s(p.get("platform")));
 			d.setAccount(s(p.get("account")));
 			d.setProfileName(s(p.get("profileName")));
 			saveIgnoreDup(new SaveOp() { public void run() { activityAccountUpdatedRepository.save(d); } });
+		} else if ("facebook.activity.extraction.started".equals(type)) {
+			ActivityExtractionStartedDocument d = new ActivityExtractionStartedDocument();
+			fillMeta(d, e);
+			d.setPlatform(s(p.get("platform")));
+			d.setKeywords(s(p.get("keywords")));
+			d.setTotalGroups(l(p.get("totalGroups")));
+			d.setTotalMembers(l(p.get("totalMembers")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityExtractionStartedRepository.save(d); } });
+		} else if ("facebook.activity.extraction.paused".equals(type)) {
+			ActivityExtractionPausedDocument d = new ActivityExtractionPausedDocument();
+			fillMeta(d, e);
+			d.setPlatform(s(p.get("platform")));
+			d.setKeywords(s(p.get("keywords")));
+			d.setTotalGroups(l(p.get("totalGroups")));
+			d.setTotalMembers(l(p.get("totalMembers")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityExtractionPausedRepository.save(d); } });
+		} else if ("facebook.activity.extraction.cancelled".equals(type)) {
+			ActivityExtractionCancelledDocument d = new ActivityExtractionCancelledDocument();
+			fillMeta(d, e);
+			d.setPlatform(s(p.get("platform")));
+			d.setKeywords(s(p.get("keywords")));
+			d.setTotalGroups(l(p.get("totalGroups")));
+			d.setTotalMembers(l(p.get("totalMembers")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityExtractionCancelledRepository.save(d); } });
+		} else if ("facebook.activity.extraction.completed".equals(type)) {
+			ActivityExtractionCompletedDocument d = new ActivityExtractionCompletedDocument();
+			fillMeta(d, e);
+			d.setPlatform(s(p.get("platform")));
+			d.setKeywords(s(p.get("keywords")));
+			d.setTotalGroups(l(p.get("totalGroups")));
+			d.setTotalMembers(l(p.get("totalMembers")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityExtractionCompletedRepository.save(d); } });
 		} else if ("facebook.activity.share_batch".equals(type)) {
 			ActivityShareBatchDocument d = new ActivityShareBatchDocument();
 			fillMeta(d, e);
@@ -249,6 +323,22 @@ public class EventConsumerService {
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityErrorDocument) {
 			ActivityErrorDocument d = (ActivityErrorDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityExtractionStartedDocument) {
+			ActivityExtractionStartedDocument d = (ActivityExtractionStartedDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityExtractionPausedDocument) {
+			ActivityExtractionPausedDocument d = (ActivityExtractionPausedDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityExtractionCancelledDocument) {
+			ActivityExtractionCancelledDocument d = (ActivityExtractionCancelledDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityExtractionCompletedDocument) {
+			ActivityExtractionCompletedDocument d = (ActivityExtractionCompletedDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof CampaignStartedDocument) {

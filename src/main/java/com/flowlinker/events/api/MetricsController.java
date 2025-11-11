@@ -28,14 +28,49 @@ public class MetricsController {
 		return ResponseEntity.ok(metricsService.overview(MetricsService.DurationRange.lastHours(hours), customerId));
 	}
 
+	@GetMapping("/actions/summary")
+	public ResponseEntity<Map<String, Long>> actionsSummary(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "hours", defaultValue = "24") int hours
+	) {
+		return ResponseEntity.ok(metricsService.actionsSummary(MetricsService.DurationRange.lastHours(hours), customerId));
+	}
+
+	@GetMapping("/people-reached")
+	public ResponseEntity<Map<String, Long>> peopleReached(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "hours", defaultValue = "24") int hours
+	) {
+		long value = metricsService.peopleReachedApprox(MetricsService.DurationRange.lastHours(hours), customerId);
+		return ResponseEntity.ok(Map.of("peopleReached", value));
+	}
+
 	@GetMapping("/recent")
 	public ResponseEntity<List<Map<String, Object>>> recent(
 		@RequestParam(name = "customerId") String customerId,
-		@RequestParam(name = "limit", defaultValue = "20") int limit
+		@RequestParam(name = "limit", defaultValue = "20") int limit,
+		@RequestParam(name = "tz", defaultValue = "America/Sao_Paulo") String tz
 	) {
-		return ResponseEntity.ok(metricsService.recentActivities(customerId, limit));
+		return ResponseEntity.ok(metricsService.recentActivities(customerId, limit, tz));
 	}
 
+	@GetMapping("/debug/account-created")
+	public ResponseEntity<List<Map<String, Object>>> accountCreated(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "limit", defaultValue = "20") int limit,
+		@RequestParam(name = "tz", defaultValue = "America/Sao_Paulo") String tz
+	) {
+		return ResponseEntity.ok(metricsService.listAccountCreated(customerId, limit, tz));
+	}
+
+	@GetMapping("/extractions/events")
+	public ResponseEntity<List<Map<String, Object>>> extractionEvents(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "limit", defaultValue = "20") int limit,
+		@RequestParam(name = "tz", defaultValue = "America/Sao_Paulo") String tz
+	) {
+		return ResponseEntity.ok(metricsService.extractionEvents(customerId, limit, tz));
+	}
 	@GetMapping("/distribution/social")
 	public ResponseEntity<Map<String, Long>> distribution(
 		@RequestParam(name = "customerId") String customerId,
