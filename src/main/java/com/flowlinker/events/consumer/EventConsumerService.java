@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.Map;
 
@@ -51,6 +52,13 @@ public class EventConsumerService {
 	private final CampaignStartedRepository campaignStartedRepository;
 	private final CampaignProgressRepository campaignProgressRepository;
 	private final CampaignCompletedRepository campaignCompletedRepository;
+
+	@Value("${app.rabbit.queue.activity}")
+	private String activityQueueName;
+	@Value("${app.rabbit.queue.campaign}")
+	private String campaignQueueName;
+	@Value("${app.rabbit.queue.security}")
+	private String securityQueueName;
 
 	public EventConsumerService(
 		EventRepository eventRepository,
@@ -86,6 +94,9 @@ public class EventConsumerService {
 		this.campaignStartedRepository = campaignStartedRepository;
 		this.campaignProgressRepository = campaignProgressRepository;
 		this.campaignCompletedRepository = campaignCompletedRepository;
+
+		log.info("RabbitMQ consumidor configurado para filas: activity='{}', campaign='{}', security='{}'",
+			activityQueueName, campaignQueueName, securityQueueName);
 	}
 
 	@RabbitListener(queues = "${app.rabbit.queue.activity}")
