@@ -9,6 +9,7 @@ spring:
   data:
     mongodb:
       uri: mongodb+srv://melges:620toi79GCy3m58g@db-mongodb-nyc3-95531-3e685911.mongo.ondigitalocean.com/flowlinker_events?retryWrites=true&w=majority&authSource=admin
+      auto-index-creation: true
   rabbitmq:
     host: localhost
     port: 5672

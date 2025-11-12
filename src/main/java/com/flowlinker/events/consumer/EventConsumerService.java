@@ -234,7 +234,7 @@ public class EventConsumerService {
 			d.setTotalGroups(l(p.get("totalGroups")));
 			d.setTotalMembers(l(p.get("totalMembers")));
 			saveIgnoreDup(new SaveOp() { public void run() { activityExtractionCompletedRepository.save(d); } });
-		} else if ("facebook.activity.share_batch".equals(type)) {
+		} else if ("facebook.activity.share_batch".equals(type) || "facebook.activity.share.batch".equals(type)) {
 			ActivityShareBatchDocument d = new ActivityShareBatchDocument();
 			fillMeta(d, e);
 			d.setPlatform("FACEBOOK");

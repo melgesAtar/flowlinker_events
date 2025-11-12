@@ -71,72 +71,92 @@ public class MetricsService {
 	}
 
 	public List<Map<String, Object>> recentActivities(String customerId, int limit, String zoneId) {
-		List<Map<String, Object>> items = new ArrayList<>();
 		ZoneId zone = safeZone(zoneId);
+		Query q = Query.query(Criteria.where("customerId").is(customerId))
+			.with(Sort.by(Sort.Direction.DESC, "eventAt")).limit(limit);
+		List<com.flowlinker.events.persistence.EventDocument> events =
+			mongoTemplate.find(q, com.flowlinker.events.persistence.EventDocument.class);
 
-		findLatest(customerId, ActivityShareBatchDocument.class).ifPresent(d ->
-			items.add(activityItem(d.getEventAt(), zone, d.getAccount(),
-				"compartilhou " + safeInt(d.getCount()) + " publicações no " + toLower(d.getPlatform()))));
+		List<Map<String, Object>> items = new ArrayList<>(events.size());
+		for (com.flowlinker.events.persistence.EventDocument ev : events) {
+			String type = ev.getEventType();
+			Map<String, Object> payload = ev.getPayload() == null ? Collections.emptyMap() : ev.getPayload();
+			String actor = s(payload.get("account"));
 
-		findLatest(customerId, com.flowlinker.events.projection.security.SecurityLoginSuccessDocument.class).ifPresent(d ->
-			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), "fez login com sucesso")));
+			// Se o desktop já mandou um resumo humano, priorize
+			String text = s(payload.get("text"));
 
-		findLatest(customerId, com.flowlinker.events.projection.security.SecurityLoginFailedDocument.class).ifPresent(d -> {
-			String reason = d.getReason() != null ? d.getReason().toLowerCase(Locale.ROOT).replace('_', ' ') : "desconhecida";
-			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), "falha de login: " + reason));
-		});
+			if (text == null || text.isBlank()) {
+			// segurança (suporta convenções com ponto e com underline)
+			if ("desktop.security.login_success".equals(type) || "desktop.security.login.success".equals(type)) {
+				text = "fez login com sucesso";
+			} else if ("desktop.security.login_failed".equals(type) || "desktop.security.login.failed".equals(type)) {
+				String reason = s(payload.get("reason"));
+				text = "falha de login" + (reason == null || reason.isBlank() ? "" : ": " + reason.toLowerCase(Locale.ROOT).replace('_', ' '));
+			} else if ("desktop.activity.session_started".equals(type) || "desktop.activity.session.started".equals(type)) {
+				text = "iniciou nova sessão";
+			} else if ("desktop.activity.session_ended".equals(type) || "desktop.activity.session.ended".equals(type) || "facebook.activity.session_ended".equals(type)) {
+				String reason = s(payload.get("reason"));
+				text = "encerrou sessão" + (reason == null || reason.isBlank() ? "" : " (" + reason + ")");
+			} else if ("facebook.activity.share_batch".equals(type) || "facebook.activity.share.batch".equals(type)) {
+				Integer count = i(payload.get("count"));
+				String platform = s(payload.get("platform"));
+				String groupName = s(payload.get("groupName"));
+				text = "compartilhou " + (count == null ? 1 : count) + " publicação"
+					+ ((count != null && count > 1) ? "s" : "")
+					+ " no " + toLower(platform == null ? "FACEBOOK" : platform)
+					+ (groupName == null || groupName.isBlank() ? "" : " (grupo: " + groupName + ")");
+			} else if ("facebook.activity.error".equals(type) || "desktop.activity.error".equals(type)) {
+				text = "Falha: " + nullToEmpty(s(payload.get("message")));
+			} else if ("facebook.activity.account_created".equals(type)) {
+				String profileName = s(payload.get("profileName"));
+				text = "criou conta/perfil" + (profileName == null || profileName.isBlank() ? "" : " (" + profileName + ")");
+			} else if ("facebook.activity.account_updated".equals(type)) {
+				String profileName = s(payload.get("profileName"));
+				text = "atualizou conta/perfil" + (profileName == null || profileName.isBlank() ? "" : " (" + profileName + ")");
+			// extração (novos eventos)
+			} else if ("facebook.activity.extraction.started".equals(type)) {
+				String keywords = s(payload.get("keywords"));
+				String platform = s(payload.get("platform"));
+				text = "Extração Iniciada - " + (keywords == null ? "" : "Keywords: " + keywords)
+					+ (platform == null ? "" : " (" + platform + ")");
+			} else if ("facebook.activity.extraction.paused".equals(type)) {
+				Long totalGroups = payload.get("totalGroups") instanceof Number ? ((Number) payload.get("totalGroups")).longValue() : 0L;
+				Long totalMembers = payload.get("totalMembers") instanceof Number ? ((Number) payload.get("totalMembers")).longValue() : 0L;
+				String keywords = s(payload.get("keywords"));
+				text = String.format("Extração Pausada - %d grupos, %d pessoas%s",
+					totalGroups, totalMembers, (keywords == null || keywords.isBlank() ? "" : " (keywords: " + keywords + ")"));
+			} else if ("facebook.activity.extraction.cancelled".equals(type)) {
+				Long totalGroups = payload.get("totalGroups") instanceof Number ? ((Number) payload.get("totalGroups")).longValue() : 0L;
+				String keywords = s(payload.get("keywords"));
+				text = String.format("Extração Cancelada - %d grupos processados%s",
+					totalGroups, (keywords == null || keywords.isBlank() ? "" : " (keywords: " + keywords + ")"));
+			} else if ("facebook.activity.extraction.completed".equals(type)) {
+				Long totalGroups = payload.get("totalGroups") instanceof Number ? ((Number) payload.get("totalGroups")).longValue() : 0L;
+				Long totalMembers = payload.get("totalMembers") instanceof Number ? ((Number) payload.get("totalMembers")).longValue() : 0L;
+				String keywords = s(payload.get("keywords"));
+				text = String.format("Extração Finalizada - %d grupos, %d pessoas%s",
+					totalGroups, totalMembers, (keywords == null || keywords.isBlank() ? "" : " (keywords: " + keywords + ")"));
+			} else if ("facebook.campaign.started".equals(type)) {
+				text = "Campanha iniciada";
+			} else if ("facebook.campaign.progress".equals(type)) {
+				text = "Campanha em progresso";
+			} else if ("facebook.campaign.completed".equals(type)) {
+				text = "Campanha finalizada";
+			}
+			}
 
-		findLatest(customerId, ActivityErrorDocument.class).ifPresent(d ->
-			items.add(activityItem(d.getEventAt(), zone, null, "Falha: " + nullToEmpty(d.getMessage()))));
+			Map<String, Object> item = new LinkedHashMap<>();
+			item.put("eventAt", ev.getEventAt());
+			item.put("eventAtLocal", ev.getEventAt().atZone(zone).toString());
+			item.put("zone", zone.getId());
+			item.put("type", type);
+			if (actor != null) item.put("actor", actor);
+			if (text != null) item.put("text", text);
 
-		findLatest(customerId, ActivitySessionStartedDocument.class).ifPresent(d ->
-			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), "iniciou nova sessão")));
-
-		findLatest(customerId, ActivitySessionEndedDocument.class).ifPresent(d -> {
-			String reason = nullToEmpty(d.getReason());
-			String text = reason.isBlank() ? "encerrou sessão" : "encerrou sessão (" + reason + ")";
-			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), text));
-		});
-
-		findLatest(customerId, ActivityAccountCreatedDocument.class).ifPresent(d ->
-			items.add(activityItem(d.getEventAt(), zone, d.getAccount(), "criou conta/perfil")));
-
-		findLatest(customerId, ActivityExtractionStartedDocument.class).ifPresent(d -> {
-			String keywords = nullToEmpty(d.getKeywords());
-			items.add(extractionItem("started", d.getEventAt(), zone,
-				"Extração Iniciada - Keywords: " + keywords,
-				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
-		});
-
-		findLatest(customerId, ActivityExtractionPausedDocument.class).ifPresent(d -> {
-			String keywords = nullToEmpty(d.getKeywords());
-			String text = String.format("Extração Pausada - %d grupos, %d pessoas (keywords: %s)",
-				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers()), keywords);
-			items.add(extractionItem("paused", d.getEventAt(), zone, text,
-				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
-		});
-
-		findLatest(customerId, ActivityExtractionCancelledDocument.class).ifPresent(d -> {
-			String keywords = nullToEmpty(d.getKeywords());
-			String text = String.format("Extração Cancelada - %d grupos processados (keywords: %s)",
-				safeLong(d.getTotalGroups()), keywords);
-			items.add(extractionItem("cancelled", d.getEventAt(), zone, text,
-				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
-		});
-
-		findLatest(customerId, ActivityExtractionCompletedDocument.class).ifPresent(d -> {
-			String keywords = nullToEmpty(d.getKeywords());
-			String text = String.format("Extração Finalizada - %d grupos, %d pessoas (keywords: %s)",
-				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers()), keywords);
-			items.add(extractionItem("completed", d.getEventAt(), zone, text,
-				safeLong(d.getTotalGroups()), safeLong(d.getTotalMembers())));
-		});
-
-		return items.stream()
-			.filter(Objects::nonNull)
-			.sorted(Comparator.comparing((Map<String, Object> m) -> (Instant) m.get("eventAt")).reversed())
-			.limit(limit)
-			.collect(Collectors.toList());
+			items.add(item);
+		}
+		return items;
 	}
 
 	private <T> Optional<T> findLatest(String customerId, Class<T> type) {
@@ -316,26 +336,53 @@ public class MetricsService {
 	public long peopleReachedApprox(DurationRange range, String customerId) {
 		Instant from = range.from();
 		Instant to = range.to();
-		List<ActivityShareBatchDocument> list = Collections.emptyList();
+
+		// 1) Projeção tipada (quando existir)
+		List<ActivityShareBatchDocument> projected = Collections.emptyList();
 		try {
 			Query q = timeRangeCustomer(customerId, from, to).with(Sort.by(Sort.Direction.DESC, "eventAt"));
-			list = mongoTemplate.find(q, ActivityShareBatchDocument.class);
+			projected = mongoTemplate.find(q, ActivityShareBatchDocument.class);
 		} catch (DataAccessException e) {
-			log.warn("Falha ao calcular peopleReached", e);
+			log.warn("Falha ao calcular peopleReached (projeção)", e);
 		}
-		Map<String, ActivityShareBatchDocument> latestPerGroup = new HashMap<>();
-		for (ActivityShareBatchDocument d : list) {
+
+		// 2) Fallback: eventos brutos na coleção 'events' (aceita os dois formatos de tipo)
+		List<com.flowlinker.events.persistence.EventDocument> raw = Collections.emptyList();
+		try {
+			Query qr = Query.query(Criteria.where("customerId").is(customerId)
+				.and("eventAt").gte(from).lte(to)
+				.and("eventType").in("facebook.activity.share_batch", "facebook.activity.share.batch"))
+				.with(Sort.by(Sort.Direction.DESC, "eventAt"));
+			raw = mongoTemplate.find(qr, com.flowlinker.events.persistence.EventDocument.class);
+		} catch (DataAccessException e) {
+			log.warn("Falha ao calcular peopleReached (bruto)", e);
+		}
+
+		// Deduplicação por grupo (usa o mais recente por grupo)
+		Map<String, Long> membersByGroup = new HashMap<>();
+
+		for (ActivityShareBatchDocument d : projected) {
 			String key = Optional.ofNullable(d.getGroupUrl()).filter(s -> !s.isBlank())
 				.orElse(Optional.ofNullable(d.getGroupName()).orElse(""));
-			if (key.isBlank()) {
-				continue;
-			}
-			latestPerGroup.putIfAbsent(key, d);
+			if (key.isBlank()) continue;
+			membersByGroup.putIfAbsent(key, parseLongSafe(d.getGroupMembers()));
 		}
-		long sum = 0;
-		for (ActivityShareBatchDocument d : latestPerGroup.values()) {
-			long members = parseLongSafe(d.getGroupMembers());
-			long reached = Math.round(members * 0.30d);
+
+		for (com.flowlinker.events.persistence.EventDocument ev : raw) {
+			Map<String, Object> p = ev.getPayload();
+			if (p == null) continue;
+			String groupUrl = s(p.get("groupUrl"));
+			String groupName = s(p.get("groupName"));
+			String key = (groupUrl != null && !groupUrl.isBlank()) ? groupUrl : (groupName == null ? "" : groupName);
+			if (key.isBlank()) continue;
+			Long members = asLong(p.get("groupMembers"));
+			if (members == null) continue;
+			membersByGroup.putIfAbsent(key, members);
+		}
+
+		long sum = 0L;
+		for (Long members : membersByGroup.values()) {
+			long reached = Math.round(members * 0.30d); // heurística
 			sum += reached;
 		}
 		return sum;
@@ -414,6 +461,21 @@ public class MetricsService {
 		} catch (Exception e) {
 			return 0;
 		}
+	}
+
+	private Long asLong(Object v) {
+		if (v == null) return null;
+		if (v instanceof Number) return ((Number) v).longValue();
+		try { return Long.parseLong(String.valueOf(v).replaceAll("\\D", "")); } catch (Exception e) { return null; }
+	}
+	private String s(Object v) {
+		return v == null ? null : String.valueOf(v);
+	}
+
+	private Integer i(Object v) {
+		if (v == null) return null;
+		if (v instanceof Number) return ((Number) v).intValue();
+		try { return Integer.parseInt(String.valueOf(v)); } catch (Exception e) { return null; }
 	}
 
 	public static class DurationRange {
