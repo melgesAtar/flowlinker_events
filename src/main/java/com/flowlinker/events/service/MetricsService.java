@@ -70,6 +70,12 @@ public class MetricsService {
 		return out;
 	}
 
+	public long sharesCount(DurationRange range, String customerId) {
+		Instant from = range.from();
+		Instant to = range.to();
+		return countShareBatch(customerId, from, to);
+	}
+
 	public List<Map<String, Object>> recentActivities(String customerId, int limit, String zoneId) {
 		ZoneId zone = safeZone(zoneId);
 		Query q = Query.query(Criteria.where("customerId").is(customerId))

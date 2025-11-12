@@ -103,6 +103,15 @@ public class MetricsController {
 	) {
 		return ResponseEntity.ok(metricsService.rankingPersonas(MetricsService.DurationRange.lastHours(hours), customerId, limit));
 	}
+
+	@GetMapping("/shares/count")
+	public ResponseEntity<Map<String, Long>> sharesCount(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "hours", defaultValue = "24") int hours
+	) {
+		long value = metricsService.sharesCount(MetricsService.DurationRange.lastHours(hours), customerId);
+		return ResponseEntity.ok(Map.of("shares", value));
+	}
 }
 
 

@@ -1,7 +1,6 @@
 package com.flowlinker.events.consumer;
 
 import com.flowlinker.events.api.dto.EnrichedEventDTO;
-import com.flowlinker.events.config.RabbitConfig;
 import com.flowlinker.events.persistence.EventDocument;
 import com.flowlinker.events.persistence.EventRepository;
 import com.flowlinker.events.projection.activity.*;
@@ -89,21 +88,21 @@ public class EventConsumerService {
 		this.campaignCompletedRepository = campaignCompletedRepository;
 	}
 
-	@RabbitListener(queues = RabbitConfig.QUEUE_ACTIVITY)
+	@RabbitListener(queues = "${app.rabbit.queue.activity}")
 	public void onActivity(EnrichedEventDTO event) {
 		log.info("EVENTO RECEBIDO - fila=activity type={} customerId={} eventId={}",
 			event.getEventType(), event.getCustomerId(), event.getEventId());
 		handle(event);
 	}
 
-	@RabbitListener(queues = RabbitConfig.QUEUE_CAMPAIGN)
+	@RabbitListener(queues = "${app.rabbit.queue.campaign}")
 	public void onCampaign(EnrichedEventDTO event) {
 		log.info("EVENTO RECEBIDO - fila=campaign type={} customerId={} eventId={}",
 			event.getEventType(), event.getCustomerId(), event.getEventId());
 		handle(event);
 	}
 
-	@RabbitListener(queues = RabbitConfig.QUEUE_SECURITY)
+	@RabbitListener(queues = "${app.rabbit.queue.security}")
 	public void onSecurity(EnrichedEventDTO event) {
 		log.info("EVENTO RECEBIDO - fila=security type={} customerId={} eventId={}",
 			event.getEventType(), event.getCustomerId(), event.getEventId());
