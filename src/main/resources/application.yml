@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: flowlinker-events
   jackson:
@@ -8,17 +10,23 @@ spring:
       adjust-dates-to-context-time-zone: false
   data:
     mongodb:
-      uri: mongodb+srv://melges:620toi79GCy3m58g@db-mongodb-nyc3-95531-3e685911.mongo.ondigitalocean.com/flowlinker_events?retryWrites=true&w=majority&authSource=admin
-      auto-index-creation: true
+      uri: ${MONGODB_URI}
   rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
-    virtual-host: /
+    host: ${RABBITMQ_HOST}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+    virtual-host: ${RABBITMQ_VHOST:/}
 
 server:
-  port: 9090
+  port: ${SERVER_PORT:9090}
+
+app:
+  rabbit:
+    queue:
+      activity: ${RABBIT_QUEUE_ACTIVITY:events.activity}
+      campaign: ${RABBIT_QUEUE_CAMPAIGN:events.campaign}
+      security: ${RABBIT_QUEUE_SECURITY:events.security}
 
 management:
   endpoints:
@@ -36,5 +44,4 @@ logging:
     org.springframework.data.mongodb: INFO
     com.flowlinker.events: DEBUG
     org.springframework.web.filter.CommonsRequestLoggingFilter: DEBUG
-
 
