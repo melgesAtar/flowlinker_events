@@ -1,0 +1,11 @@
+# Reduz o contexto de build
+.git
+.gitignore
+.env
+target/
+**/.idea/
+**/.vscode/
+**/.DS_Store
+**/node_modules/
+
+
