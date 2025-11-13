@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/root/.m2 mvn -q -e -DskipTests dependency:go-offl
 COPY src ./src
 
 # Build
-RUN --mount=type=cache,target=/root/.m2 mvn -q -DskipTests package
+RUN --mount=type=cache,target=/root/.m2 mvn -q -DskipTests package spring-boot:repackage
 
 # ---------- Runtime ----------
 FROM eclipse-temurin:17-jre-alpine AS runtime
