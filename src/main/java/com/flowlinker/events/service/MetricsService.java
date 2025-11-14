@@ -1,6 +1,8 @@
 package com.flowlinker.events.service;
 
+import com.flowlinker.events.persistence.EventDocument;
 import com.flowlinker.events.projection.activity.*;
+import com.flowlinker.events.projection.campaign.CampaignStartedDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -76,100 +78,242 @@ public class MetricsService {
 		return countShareBatch(customerId, from, to);
 	}
 
+	public long campaignsCount(DurationRange range, String customerId) {
+		Instant from = range.from();
+		Instant to = range.to();
+		Query query = timeRangeCustomer(customerId, from, to);
+		try {
+			return mongoTemplate.count(query, CampaignStartedDocument.class);
+		} catch (DataAccessException e) {
+			log.warn("Falha ao contar CampaignStarted", e);
+			return 0;
+		}
+	}
+
 	public List<Map<String, Object>> recentActivities(String customerId, int limit, String zoneId) {
 		ZoneId zone = safeZone(zoneId);
 		List<Map<String, Object>> items = new ArrayList<>();
 		Sort sort = Sort.by(Sort.Direction.DESC, "eventAt");
+		List<EventDocument> events = Collections.emptyList();
 
 		try {
-			Query query = Query.query(Criteria.where("customerId").is(customerId)).with(sort).limit(limit);
-			for (ActivityShareBatchDocument d : mongoTemplate.find(query, ActivityShareBatchDocument.class)) {
-				String account = Optional.ofNullable(d.getAccount()).filter(s -> !s.isBlank()).orElse("desconhecido");
-				String platform = Optional.ofNullable(d.getPlatform()).filter(s -> !s.isBlank()).orElse("DESCONHECIDO");
-				String groupName = Optional.ofNullable(d.getGroupName()).filter(s -> !s.isBlank()).orElse(null);
-				String text = groupName == null
-					? String.format("Compartilhamento realizado (%s)", platform)
-					: String.format("Compartilhamento no grupo %s (%s)", groupName, platform);
-				Map<String, Object> entry = activityItem(d.getEventAt(), zone, account, text);
-				entry.put("type", "share");
-				entry.put("platform", platform);
-				entry.put("account", account);
-				entry.put("groupName", groupName);
-				entry.put("groupUrl", Optional.ofNullable(d.getGroupUrl()).filter(s -> !s.isBlank()).orElse(null));
-				entry.put("post", Optional.ofNullable(d.getPost()).filter(s -> !s.isBlank()).orElse(null));
-				entry.put("deviceId", d.getDeviceId());
-				entry.put("ip", d.getIp());
-				items.add(entry);
-			}
+			Query query = Query.query(Criteria.where("customerId").is(customerId))
+				.with(sort)
+				.limit(Math.max(limit, 1) * 4);
+			events = mongoTemplate.find(query, EventDocument.class);
 		} catch (DataAccessException e) {
-			log.warn("Falha ao consultar activity_share_batch", e);
+			log.warn("Falha ao consultar eventos brutos", e);
 		}
 
-		try {
-			Query query = Query.query(Criteria.where("customerId").is(customerId)).with(sort).limit(limit);
-			for (ActivitySessionStartedDocument d : mongoTemplate.find(query, ActivitySessionStartedDocument.class)) {
-				String account = Optional.ofNullable(d.getAccount()).filter(s -> !s.isBlank()).orElse("desconhecido");
-				String platform = Optional.ofNullable(d.getPlatform()).filter(s -> !s.isBlank()).orElse("DESCONHECIDO");
-				String text = String.format("Sessão iniciada (%s)", platform);
-				Map<String, Object> entry = activityItem(d.getEventAt(), zone, account, text);
-				entry.put("type", "session.started");
-				entry.put("platform", platform);
-				entry.put("account", account);
-				entry.put("deviceId", d.getDeviceId());
-				entry.put("ip", d.getIp());
-				items.add(entry);
+		for (EventDocument event : events) {
+			Map<String, Object> mapped = mapRecentActivity(event, zone);
+			if (mapped == null) {
+				continue;
 			}
-		} catch (DataAccessException e) {
-			log.warn("Falha ao consultar activity_session_started", e);
-		}
-
-		try {
-			Query query = Query.query(Criteria.where("customerId").is(customerId)).with(sort).limit(limit);
-			for (ActivitySessionEndedDocument d : mongoTemplate.find(query, ActivitySessionEndedDocument.class)) {
-				String account = Optional.ofNullable(d.getAccount()).filter(s -> !s.isBlank()).orElse("desconhecido");
-				String platform = Optional.ofNullable(d.getPlatform()).filter(s -> !s.isBlank()).orElse("DESCONHECIDO");
-				String reason = Optional.ofNullable(d.getReason()).filter(s -> !s.isBlank()).orElse("motivo desconhecido");
-				String text = String.format("Sessão encerrada (%s) - %s", platform, reason);
-				Map<String, Object> entry = activityItem(d.getEventAt(), zone, account, text);
-				entry.put("type", "session.ended");
-				entry.put("platform", platform);
-				entry.put("account", account);
-				entry.put("reason", reason);
-				entry.put("deviceId", d.getDeviceId());
-				entry.put("ip", d.getIp());
-				items.add(entry);
+			items.add(mapped);
+			if (items.size() >= limit) {
+				break;
 			}
-		} catch (DataAccessException e) {
-			log.warn("Falha ao consultar activity_session_ended", e);
-		}
-
-		try {
-			Query query = Query.query(Criteria.where("customerId").is(customerId)).with(sort).limit(limit);
-			for (ActivityErrorDocument d : mongoTemplate.find(query, ActivityErrorDocument.class)) {
-				String code = Optional.ofNullable(d.getCode()).filter(s -> !s.isBlank()).orElse("desconhecido");
-				String message = Optional.ofNullable(d.getMessage()).filter(s -> !s.isBlank()).orElse(null);
-				String text = message == null
-					? String.format("Erro reportado (%s)", code)
-					: String.format("Erro reportado (%s): %s", code, message);
-				String actor = Optional.ofNullable(d.getDeviceId()).filter(s -> !s.isBlank()).orElse("sistema");
-				Map<String, Object> entry = activityItem(d.getEventAt(), zone, actor, text);
-				entry.put("type", "error");
-				entry.put("code", code);
-				entry.put("message", message);
-				entry.put("context", d.getContext());
-				entry.put("deviceId", d.getDeviceId());
-				entry.put("ip", d.getIp());
-				items.add(entry);
-			}
-		} catch (DataAccessException e) {
-			log.warn("Falha ao consultar activity_error", e);
-		}
-
-		items.sort(Comparator.comparing((Map<String, Object> m) -> (Instant) m.get("eventAt")).reversed());
-		if (items.size() > limit) {
-			return new ArrayList<>(items.subList(0, limit));
 		}
 		return items;
+	}
+
+	private Map<String, Object> mapRecentActivity(EventDocument event, ZoneId zone) {
+		if (event == null || event.getEventType() == null) {
+			return null;
+		}
+
+		String type = event.getEventType();
+		Map<String, Object> payload = event.getPayload() == null ? Collections.emptyMap() : event.getPayload();
+		String deviceId = event.getDeviceId();
+		String ip = event.getIp();
+		String eventId = event.getEventId();
+		Instant ts = Optional.ofNullable(event.getEventAt()).orElse(event.getReceivedAt());
+		if (ts == null) {
+			ts = Instant.now();
+		}
+
+		String account = Optional.ofNullable(s(payload.get("account"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+		String platform = Optional.ofNullable(s(payload.get("platform"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+		if (platform == null) {
+			platform = Optional.ofNullable(s(payload.get("source"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+		}
+
+		if ("facebook.activity.share_batch".equals(type) || "facebook.activity.share.batch".equals(type)) {
+			String actor = account == null || account.isBlank() ? "desconhecido" : account;
+			String effectivePlatform = platform == null || platform.isBlank() ? "FACEBOOK" : platform;
+			String groupName = Optional.ofNullable(s(payload.get("groupName"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String text = groupName == null
+				? String.format("Compartilhamento realizado (%s)", effectivePlatform)
+				: String.format("Compartilhamento no grupo %s (%s)", groupName, effectivePlatform);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "share");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			entry.put("account", actor);
+			entry.put("groupName", groupName);
+			entry.put("groupUrl", Optional.ofNullable(s(payload.get("groupUrl"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null));
+			entry.put("post", Optional.ofNullable(s(payload.get("post"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null));
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("desktop.activity.session_started".equals(type) || "facebook.activity.session_started".equals(type)) {
+			String actor = account == null || account.isBlank() ? Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("desconhecido") : account;
+			String effectivePlatform = platform == null || platform.isBlank()
+				? (type.startsWith("desktop") ? "DESKTOP" : "FACEBOOK")
+				: platform;
+			String text = String.format("Sessão iniciada (%s)", effectivePlatform);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "session.started");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			entry.put("account", actor);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("desktop.activity.session_ended".equals(type) || "facebook.activity.session_ended".equals(type)) {
+			String actor = account == null || account.isBlank() ? Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("desconhecido") : account;
+			String effectivePlatform = platform == null || platform.isBlank()
+				? (type.startsWith("desktop") ? "DESKTOP" : "FACEBOOK")
+				: platform;
+			String reason = Optional.ofNullable(s(payload.get("reason"))).map(String::trim).filter(v -> !v.isEmpty()).orElse("motivo desconhecido");
+			String text = String.format("Sessão encerrada (%s) - %s", effectivePlatform, reason);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "session.ended");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			entry.put("account", actor);
+			entry.put("reason", reason);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("facebook.activity.error".equals(type) || "desktop.activity.error".equals(type)) {
+			String actor = account == null || account.isBlank()
+				? Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("sistema")
+				: account;
+			String code = Optional.ofNullable(s(payload.get("code"))).map(String::trim).filter(v -> !v.isEmpty()).orElse("desconhecido");
+			String message = Optional.ofNullable(s(payload.get("message"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String text = message == null
+				? String.format("Erro reportado (%s)", code)
+				: String.format("Erro reportado (%s): %s", code, message);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "error");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("code", code);
+			entry.put("message", message);
+			Object ctx = payload.get("context");
+			if (ctx instanceof Map) {
+				entry.put("context", ctx);
+			}
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("facebook.activity.extraction.started".equals(type)) {
+			Map<String, Object> entry = extractionItem("extraction.started", ts, zone,
+				String.format("Extração iniciada - keywords: %s", Optional.ofNullable(s(payload.get("keywords"))).map(String::trim).orElse("")),
+				Optional.ofNullable(asLong(payload.get("totalGroups"))).orElse(0L),
+				Optional.ofNullable(asLong(payload.get("totalMembers"))).orElse(0L));
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("facebook.activity.extraction.paused".equals(type)) {
+			long totalGroups = Optional.ofNullable(asLong(payload.get("totalGroups"))).orElse(0L);
+			long totalMembers = Optional.ofNullable(asLong(payload.get("totalMembers"))).orElse(0L);
+			String text = String.format("Extração pausada - %d grupos, %d pessoas", totalGroups, totalMembers);
+			Map<String, Object> entry = extractionItem("extraction.paused", ts, zone, text, totalGroups, totalMembers);
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("facebook.activity.extraction.cancelled".equals(type)) {
+			long totalGroups = Optional.ofNullable(asLong(payload.get("totalGroups"))).orElse(0L);
+			String text = String.format("Extração cancelada - %d grupos processados", totalGroups);
+			Map<String, Object> entry = extractionItem("extraction.cancelled", ts, zone, text, totalGroups,
+				Optional.ofNullable(asLong(payload.get("totalMembers"))).orElse(0L));
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("facebook.activity.extraction.completed".equals(type)) {
+			long totalGroups = Optional.ofNullable(asLong(payload.get("totalGroups"))).orElse(0L);
+			long totalMembers = Optional.ofNullable(asLong(payload.get("totalMembers"))).orElse(0L);
+			String text = String.format("Extração concluída - %d grupos, %d pessoas", totalGroups, totalMembers);
+			Map<String, Object> entry = extractionItem("extraction.completed", ts, zone, text, totalGroups, totalMembers);
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("facebook.activity.account_created".equals(type)
+			|| "activity_account_created".equals(type)
+			|| "desktop.activity.account_created".equals(type)
+			|| "desktop.activity.account.created".equals(type)) {
+			String actor = account == null || account.isBlank() ? "desconhecido" : account;
+			String effectivePlatform = platform == null || platform.isBlank() ? "DESCONHECIDO" : platform;
+			String profileName = Optional.ofNullable(s(payload.get("profileName"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String text = String.format("Conta cadastrada (%s)", effectivePlatform);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "account.created");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			entry.put("account", actor);
+			entry.put("profileName", profileName);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("facebook.activity.account_updated".equals(type)
+			|| "desktop.activity.account_updated".equals(type)
+			|| "desktop.activity.account.updated".equals(type)) {
+			String actor = account == null || account.isBlank() ? "desconhecido" : account;
+			String effectivePlatform = platform == null || platform.isBlank() ? "DESCONHECIDO" : platform;
+			String profileName = Optional.ofNullable(s(payload.get("profileName"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String accountId = Optional.ofNullable(s(payload.get("accountId"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String source = Optional.ofNullable(s(payload.get("source"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			Map<String, Object> changes = asMap(payload.get("changes"));
+			String changeSummary = summarizeAccountChanges(changes);
+			String text = changeSummary == null
+				? String.format("Conta atualizada (%s)", effectivePlatform)
+				: String.format("Conta atualizada (%s) - mudanças: %s", effectivePlatform, changeSummary);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "account.updated");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			entry.put("account", actor);
+			entry.put("profileName", profileName);
+			entry.put("accountId", accountId);
+			entry.put("source", source);
+			if (changes != null && !changes.isEmpty()) {
+				entry.put("changes", changes);
+			}
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		}
+
+		String actor = account == null || account.isBlank()
+			? Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("sistema")
+			: account;
+		String text = String.format("Evento recebido (%s)", type);
+		Map<String, Object> entry = activityItem(ts, zone, actor, text);
+		entry.put("type", "generic");
+		entry.put("eventType", type);
+		entry.put("eventId", eventId);
+		entry.put("deviceId", deviceId);
+		entry.put("ip", ip);
+		if (!payload.isEmpty()) {
+			entry.put("payload", payload);
+		}
+		return entry;
 	}
 
 
@@ -481,6 +625,54 @@ public class MetricsService {
 		if (v == null) return null;
 		if (v instanceof Number) return ((Number) v).longValue();
 		try { return Long.parseLong(String.valueOf(v).replaceAll("\\D", "")); } catch (Exception e) { return null; }
+	}
+	@SuppressWarnings("unchecked")
+	private Map<String, Object> asMap(Object value) {
+		if (value instanceof Map) {
+			return (Map<String, Object>) value;
+		}
+		return null;
+	}
+	private String summarizeAccountChanges(Map<String, Object> changes) {
+		if (changes == null || changes.isEmpty()) {
+			return null;
+		}
+		List<String> labels = new ArrayList<>();
+		if (changes.containsKey("nomePerfil")) {
+			labels.add("nome do perfil");
+		}
+		if (changes.containsKey("password")) {
+			labels.add("senha");
+		}
+		if (changes.containsKey("status")) {
+			labels.add("status");
+		}
+		if (changes.containsKey("cookies")) {
+			labels.add("cookies");
+		}
+		if (labels.isEmpty()) {
+			labels = changes.keySet().stream()
+				.map(String::valueOf)
+				.filter(s -> s != null && !s.isBlank())
+				.collect(Collectors.toList());
+		}
+		if (labels.isEmpty()) {
+			return null;
+		}
+		return joinWithAnd(labels);
+	}
+	private String joinWithAnd(List<String> items) {
+		if (items == null || items.isEmpty()) {
+			return "";
+		}
+		if (items.size() == 1) {
+			return items.get(0);
+		}
+		if (items.size() == 2) {
+			return items.get(0) + " e " + items.get(1);
+		}
+		String last = items.get(items.size() - 1);
+		return String.join(", ", items.subList(0, items.size() - 1)) + " e " + last;
 	}
 	private String s(Object v) {
 		return v == null ? null : String.valueOf(v);

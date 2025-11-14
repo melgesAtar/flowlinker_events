@@ -5,6 +5,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.Map;
 
 @Document(collection = "activity_account_updated")
 public class ActivityAccountUpdatedDocument {
@@ -24,6 +25,9 @@ public class ActivityAccountUpdatedDocument {
 	private String platform; // FACEBOOK
 	private String account;
 	private String profileName;
+	private String accountId;
+	private String source;
+	private Map<String, Object> changes;
 
 	public String getId() { return id; }
 	public void setId(String id) { this.id = id; }
@@ -45,6 +49,12 @@ public class ActivityAccountUpdatedDocument {
 	public void setAccount(String account) { this.account = account; }
 	public String getProfileName() { return profileName; }
 	public void setProfileName(String profileName) { this.profileName = profileName; }
+	public String getAccountId() { return accountId; }
+	public void setAccountId(String accountId) { this.accountId = accountId; }
+	public String getSource() { return source; }
+	public void setSource(String source) { this.source = source; }
+	public Map<String, Object> getChanges() { return changes; }
+	public void setChanges(Map<String, Object> changes) { this.changes = changes; }
 }
 
 

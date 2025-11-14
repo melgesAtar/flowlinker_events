@@ -161,14 +161,14 @@ public class EventConsumerService {
 	private void projectTyped(EnrichedEventDTO e) {
 		String type = e.getEventType();
 		Map<String, Object> p = e.getPayload();
-		if ("desktop.security.login_success".equals(type)) {
+		if ("desktop.security.login_success".equals(type) || "desktop.security.login.success".equals(type)) {
 			SecurityLoginSuccessDocument d = new SecurityLoginSuccessDocument();
 			fillMeta(d, e);
 			d.setPlatform(s(p.get("platform")));
 			d.setAccount(s(p.get("account")));
 			d.setFingerprint(s(p.get("fingerprint")));
 			saveIgnoreDup(new SaveOp() { public void run() { securityLoginSuccessRepository.save(d); } });
-		} else if ("desktop.security.login_failed".equals(type)) {
+		} else if ("desktop.security.login_failed".equals(type) || "desktop.security.login.failed".equals(type)) {
 			SecurityLoginFailedDocument d = new SecurityLoginFailedDocument();
 			fillMeta(d, e);
 			d.setReason(s(p.get("reason")));
@@ -211,6 +211,16 @@ public class EventConsumerService {
 			d.setPlatform(s(p.get("platform")));
 			d.setAccount(s(p.get("account")));
 			d.setProfileName(s(p.get("profileName")));
+			d.setAccountId(s(p.get("accountId")));
+			d.setSource(s(p.get("source")));
+			Object changes = p.get("changes");
+			if (changes instanceof Map) {
+				@SuppressWarnings("unchecked")
+				Map<String, Object> mapChanges = (Map<String, Object>) changes;
+				d.setChanges(mapChanges);
+			} else {
+				d.setChanges(null);
+			}
 			saveIgnoreDup(new SaveOp() { public void run() { activityAccountUpdatedRepository.save(d); } });
 		} else if ("facebook.activity.extraction.started".equals(type)) {
 			ActivityExtractionStartedDocument d = new ActivityExtractionStartedDocument();

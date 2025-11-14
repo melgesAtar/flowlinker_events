@@ -112,6 +112,15 @@ public class MetricsController {
 		long value = metricsService.sharesCount(MetricsService.DurationRange.lastHours(hours), customerId);
 		return ResponseEntity.ok(Map.of("shares", value));
 	}
+
+	@GetMapping("/campaigns/count")
+	public ResponseEntity<Map<String, Long>> campaignsCount(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "hours", defaultValue = "24") int hours
+	) {
+		long value = metricsService.campaignsCount(MetricsService.DurationRange.lastHours(hours), customerId);
+		return ResponseEntity.ok(Map.of("campaigns", value));
+	}
 }
 
 
