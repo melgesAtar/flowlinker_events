@@ -78,92 +78,100 @@ public class MetricsService {
 
 	public List<Map<String, Object>> recentActivities(String customerId, int limit, String zoneId) {
 		ZoneId zone = safeZone(zoneId);
-		Query q = Query.query(Criteria.where("customerId").is(customerId))
-			.with(Sort.by(Sort.Direction.DESC, "eventAt")).limit(limit);
-		List<com.flowlinker.events.persistence.EventDocument> events =
-			mongoTemplate.find(q, com.flowlinker.events.persistence.EventDocument.class);
+		List<Map<String, Object>> items = new ArrayList<>();
+		Sort sort = Sort.by(Sort.Direction.DESC, "eventAt");
 
-		List<Map<String, Object>> items = new ArrayList<>(events.size());
-		for (com.flowlinker.events.persistence.EventDocument ev : events) {
-			String type = ev.getEventType();
-			Map<String, Object> payload = ev.getPayload() == null ? Collections.emptyMap() : ev.getPayload();
-			String actor = s(payload.get("account"));
-
-			// Se o desktop já mandou um resumo humano, priorize
-			String text = s(payload.get("text"));
-
-			if (text == null || text.isBlank()) {
-			// segurança (suporta convenções com ponto e com underline)
-			if ("desktop.security.login_success".equals(type) || "desktop.security.login.success".equals(type)) {
-				text = "fez login com sucesso";
-			} else if ("desktop.security.login_failed".equals(type) || "desktop.security.login.failed".equals(type)) {
-				String reason = s(payload.get("reason"));
-				text = "falha de login" + (reason == null || reason.isBlank() ? "" : ": " + reason.toLowerCase(Locale.ROOT).replace('_', ' '));
-			} else if ("desktop.activity.session_started".equals(type) || "desktop.activity.session.started".equals(type)) {
-				text = "iniciou nova sessão";
-			} else if ("desktop.activity.session_ended".equals(type) || "desktop.activity.session.ended".equals(type) || "facebook.activity.session_ended".equals(type)) {
-				String reason = s(payload.get("reason"));
-				text = "encerrou sessão" + (reason == null || reason.isBlank() ? "" : " (" + reason + ")");
-			} else if ("facebook.activity.share_batch".equals(type) || "facebook.activity.share.batch".equals(type)) {
-				Integer count = i(payload.get("count"));
-				String platform = s(payload.get("platform"));
-				String groupName = s(payload.get("groupName"));
-				text = "compartilhou " + (count == null ? 1 : count) + " publicação"
-					+ ((count != null && count > 1) ? "s" : "")
-					+ " no " + toLower(platform == null ? "FACEBOOK" : platform)
-					+ (groupName == null || groupName.isBlank() ? "" : " (grupo: " + groupName + ")");
-			} else if ("facebook.activity.error".equals(type) || "desktop.activity.error".equals(type)) {
-				text = "Falha: " + nullToEmpty(s(payload.get("message")));
-			} else if ("facebook.activity.account_created".equals(type)) {
-				String profileName = s(payload.get("profileName"));
-				text = "criou conta/perfil" + (profileName == null || profileName.isBlank() ? "" : " (" + profileName + ")");
-			} else if ("facebook.activity.account_updated".equals(type)) {
-				String profileName = s(payload.get("profileName"));
-				text = "atualizou conta/perfil" + (profileName == null || profileName.isBlank() ? "" : " (" + profileName + ")");
-			// extração (novos eventos)
-			} else if ("facebook.activity.extraction.started".equals(type)) {
-				String keywords = s(payload.get("keywords"));
-				String platform = s(payload.get("platform"));
-				text = "Extração Iniciada - " + (keywords == null ? "" : "Keywords: " + keywords)
-					+ (platform == null ? "" : " (" + platform + ")");
-			} else if ("facebook.activity.extraction.paused".equals(type)) {
-				Long totalGroups = payload.get("totalGroups") instanceof Number ? ((Number) payload.get("totalGroups")).longValue() : 0L;
-				Long totalMembers = payload.get("totalMembers") instanceof Number ? ((Number) payload.get("totalMembers")).longValue() : 0L;
-				String keywords = s(payload.get("keywords"));
-				text = String.format("Extração Pausada - %d grupos, %d pessoas%s",
-					totalGroups, totalMembers, (keywords == null || keywords.isBlank() ? "" : " (keywords: " + keywords + ")"));
-			} else if ("facebook.activity.extraction.cancelled".equals(type)) {
-				Long totalGroups = payload.get("totalGroups") instanceof Number ? ((Number) payload.get("totalGroups")).longValue() : 0L;
-				String keywords = s(payload.get("keywords"));
-				text = String.format("Extração Cancelada - %d grupos processados%s",
-					totalGroups, (keywords == null || keywords.isBlank() ? "" : " (keywords: " + keywords + ")"));
-			} else if ("facebook.activity.extraction.completed".equals(type)) {
-				Long totalGroups = payload.get("totalGroups") instanceof Number ? ((Number) payload.get("totalGroups")).longValue() : 0L;
-				Long totalMembers = payload.get("totalMembers") instanceof Number ? ((Number) payload.get("totalMembers")).longValue() : 0L;
-				String keywords = s(payload.get("keywords"));
-				text = String.format("Extração Finalizada - %d grupos, %d pessoas%s",
-					totalGroups, totalMembers, (keywords == null || keywords.isBlank() ? "" : " (keywords: " + keywords + ")"));
-			} else if ("facebook.campaign.started".equals(type)) {
-				text = "Campanha iniciada";
-			} else if ("facebook.campaign.progress".equals(type)) {
-				text = "Campanha em progresso";
-			} else if ("facebook.campaign.completed".equals(type)) {
-				text = "Campanha finalizada";
+		try {
+			Query query = Query.query(Criteria.where("customerId").is(customerId)).with(sort).limit(limit);
+			for (ActivityShareBatchDocument d : mongoTemplate.find(query, ActivityShareBatchDocument.class)) {
+				String account = Optional.ofNullable(d.getAccount()).filter(s -> !s.isBlank()).orElse("desconhecido");
+				String platform = Optional.ofNullable(d.getPlatform()).filter(s -> !s.isBlank()).orElse("DESCONHECIDO");
+				String groupName = Optional.ofNullable(d.getGroupName()).filter(s -> !s.isBlank()).orElse(null);
+				String text = groupName == null
+					? String.format("Compartilhamento realizado (%s)", platform)
+					: String.format("Compartilhamento no grupo %s (%s)", groupName, platform);
+				Map<String, Object> entry = activityItem(d.getEventAt(), zone, account, text);
+				entry.put("type", "share");
+				entry.put("platform", platform);
+				entry.put("account", account);
+				entry.put("groupName", groupName);
+				entry.put("groupUrl", Optional.ofNullable(d.getGroupUrl()).filter(s -> !s.isBlank()).orElse(null));
+				entry.put("post", Optional.ofNullable(d.getPost()).filter(s -> !s.isBlank()).orElse(null));
+				entry.put("deviceId", d.getDeviceId());
+				entry.put("ip", d.getIp());
+				items.add(entry);
 			}
+		} catch (DataAccessException e) {
+			log.warn("Falha ao consultar activity_share_batch", e);
+		}
+
+		try {
+			Query query = Query.query(Criteria.where("customerId").is(customerId)).with(sort).limit(limit);
+			for (ActivitySessionStartedDocument d : mongoTemplate.find(query, ActivitySessionStartedDocument.class)) {
+				String account = Optional.ofNullable(d.getAccount()).filter(s -> !s.isBlank()).orElse("desconhecido");
+				String platform = Optional.ofNullable(d.getPlatform()).filter(s -> !s.isBlank()).orElse("DESCONHECIDO");
+				String text = String.format("Sessão iniciada (%s)", platform);
+				Map<String, Object> entry = activityItem(d.getEventAt(), zone, account, text);
+				entry.put("type", "session.started");
+				entry.put("platform", platform);
+				entry.put("account", account);
+				entry.put("deviceId", d.getDeviceId());
+				entry.put("ip", d.getIp());
+				items.add(entry);
 			}
+		} catch (DataAccessException e) {
+			log.warn("Falha ao consultar activity_session_started", e);
+		}
 
-			Map<String, Object> item = new LinkedHashMap<>();
-			item.put("eventAt", ev.getEventAt());
-			item.put("eventAtLocal", ev.getEventAt().atZone(zone).toString());
-			item.put("zone", zone.getId());
-			item.put("type", type);
-			if (actor != null) item.put("actor", actor);
-			if (text != null) item.put("text", text);
+		try {
+			Query query = Query.query(Criteria.where("customerId").is(customerId)).with(sort).limit(limit);
+			for (ActivitySessionEndedDocument d : mongoTemplate.find(query, ActivitySessionEndedDocument.class)) {
+				String account = Optional.ofNullable(d.getAccount()).filter(s -> !s.isBlank()).orElse("desconhecido");
+				String platform = Optional.ofNullable(d.getPlatform()).filter(s -> !s.isBlank()).orElse("DESCONHECIDO");
+				String reason = Optional.ofNullable(d.getReason()).filter(s -> !s.isBlank()).orElse("motivo desconhecido");
+				String text = String.format("Sessão encerrada (%s) - %s", platform, reason);
+				Map<String, Object> entry = activityItem(d.getEventAt(), zone, account, text);
+				entry.put("type", "session.ended");
+				entry.put("platform", platform);
+				entry.put("account", account);
+				entry.put("reason", reason);
+				entry.put("deviceId", d.getDeviceId());
+				entry.put("ip", d.getIp());
+				items.add(entry);
+			}
+		} catch (DataAccessException e) {
+			log.warn("Falha ao consultar activity_session_ended", e);
+		}
 
-			items.add(item);
+		try {
+			Query query = Query.query(Criteria.where("customerId").is(customerId)).with(sort).limit(limit);
+			for (ActivityErrorDocument d : mongoTemplate.find(query, ActivityErrorDocument.class)) {
+				String code = Optional.ofNullable(d.getCode()).filter(s -> !s.isBlank()).orElse("desconhecido");
+				String message = Optional.ofNullable(d.getMessage()).filter(s -> !s.isBlank()).orElse(null);
+				String text = message == null
+					? String.format("Erro reportado (%s)", code)
+					: String.format("Erro reportado (%s): %s", code, message);
+				String actor = Optional.ofNullable(d.getDeviceId()).filter(s -> !s.isBlank()).orElse("sistema");
+				Map<String, Object> entry = activityItem(d.getEventAt(), zone, actor, text);
+				entry.put("type", "error");
+				entry.put("code", code);
+				entry.put("message", message);
+				entry.put("context", d.getContext());
+				entry.put("deviceId", d.getDeviceId());
+				entry.put("ip", d.getIp());
+				items.add(entry);
+			}
+		} catch (DataAccessException e) {
+			log.warn("Falha ao consultar activity_error", e);
+		}
+
+		items.sort(Comparator.comparing((Map<String, Object> m) -> (Instant) m.get("eventAt")).reversed());
+		if (items.size() > limit) {
+			return new ArrayList<>(items.subList(0, limit));
 		}
 		return items;
 	}
+
 
 	private <T> Optional<T> findLatest(String customerId, Class<T> type) {
 		try {
