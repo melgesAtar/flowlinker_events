@@ -21,6 +21,9 @@ public class CampaignStartedDocument {
 	private String deviceId;
 	private String ip;
 
+	private String platform;
+	private String campaignType;
+	private String eventType;
 	private Long campaignId;
 	private Long extractionId;
 	private Integer total;
@@ -39,6 +42,12 @@ public class CampaignStartedDocument {
 	public void setDeviceId(String deviceId) { this.deviceId = deviceId; }
 	public String getIp() { return ip; }
 	public void setIp(String ip) { this.ip = ip; }
+	public String getPlatform() { return platform; }
+	public void setPlatform(String platform) { this.platform = platform; }
+	public String getCampaignType() { return campaignType; }
+	public void setCampaignType(String campaignType) { this.campaignType = campaignType; }
+	public String getEventType() { return eventType; }
+	public void setEventType(String eventType) { this.eventType = eventType; }
 	public Long getCampaignId() { return campaignId; }
 	public void setCampaignId(Long campaignId) { this.campaignId = campaignId; }
 	public Long getExtractionId() { return extractionId; }

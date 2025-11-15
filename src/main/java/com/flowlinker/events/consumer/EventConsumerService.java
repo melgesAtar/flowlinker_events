@@ -29,6 +29,8 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Map;
 
 @Service
@@ -161,6 +163,9 @@ public class EventConsumerService {
 	private void projectTyped(EnrichedEventDTO e) {
 		String type = e.getEventType();
 		Map<String, Object> p = e.getPayload();
+		if (p == null) {
+			p = Collections.emptyMap();
+		}
 		if ("desktop.security.login_success".equals(type) || "desktop.security.login.success".equals(type)) {
 			SecurityLoginSuccessDocument d = new SecurityLoginSuccessDocument();
 			fillMeta(d, e);
@@ -279,23 +284,35 @@ public class EventConsumerService {
 				d.setContext(null);
 			}
 			saveIgnoreDup(new SaveOp() { public void run() { activityErrorRepository.save(d); } });
-		} else if ("facebook.campaign.started".equals(type)) {
+		} else if (isCampaignEvent(type, "started")) {
 			CampaignStartedDocument d = new CampaignStartedDocument();
 			fillMeta(d, e);
+			CampaignDescriptor descriptor = describeCampaign(type, p);
+			d.setPlatform(descriptor.platform);
+			d.setCampaignType(descriptor.category);
+			d.setEventType(type);
 			d.setCampaignId(l(p.get("campaignId")));
 			d.setExtractionId(l(p.get("extractionId")));
 			d.setTotal(i(p.get("total")));
 			saveIgnoreDup(new SaveOp() { public void run() { campaignStartedRepository.save(d); } });
-		} else if ("facebook.campaign.progress".equals(type)) {
+		} else if (isCampaignEvent(type, "progress")) {
 			CampaignProgressDocument d = new CampaignProgressDocument();
 			fillMeta(d, e);
+			CampaignDescriptor descriptor = describeCampaign(type, p);
+			d.setPlatform(descriptor.platform);
+			d.setCampaignType(descriptor.category);
+			d.setEventType(type);
 			d.setCampaignId(l(p.get("campaignId")));
 			d.setLastProcessedIndex(i(p.get("lastProcessedIndex")));
 			d.setTotal(i(p.get("total")));
 			saveIgnoreDup(new SaveOp() { public void run() { campaignProgressRepository.save(d); } });
-		} else if ("facebook.campaign.completed".equals(type)) {
+		} else if (isCampaignEvent(type, "completed")) {
 			CampaignCompletedDocument d = new CampaignCompletedDocument();
 			fillMeta(d, e);
+			CampaignDescriptor descriptor = describeCampaign(type, p);
+			d.setPlatform(descriptor.platform);
+			d.setCampaignType(descriptor.category);
+			d.setEventType(type);
 			d.setCampaignId(l(p.get("campaignId")));
 			d.setLastProcessedIndex(i(p.get("lastProcessedIndex")));
 			d.setTotal(i(p.get("total")));
@@ -386,6 +403,55 @@ public class EventConsumerService {
 		if (v == null) return null;
 		if (v instanceof Number) return ((Number) v).longValue();
 		try { return Long.parseLong(String.valueOf(v)); } catch (Exception e) { return null; }
+	}
+
+	private boolean isCampaignEvent(String type, String suffix) {
+		if (type == null || suffix == null) {
+			return false;
+		}
+		return type.contains(".campaign.") && type.endsWith("." + suffix);
+	}
+
+	private CampaignDescriptor describeCampaign(String type, Map<String, Object> payload) {
+		String platform = s(payload.get("platform"));
+		if (platform == null) {
+			platform = s(payload.get("source"));
+		}
+		String category = null;
+		if (type != null) {
+			String[] parts = type.split("\\.");
+			int campaignIndex = -1;
+			for (int i = 0; i < parts.length; i++) {
+				if ("campaign".equals(parts[i])) {
+					campaignIndex = i;
+					break;
+				}
+			}
+			if (campaignIndex >= 0) {
+				if (platform == null && campaignIndex > 0) {
+					platform = parts[0];
+				}
+				int variantStart = campaignIndex + 1;
+				int variantEnd = parts.length - 1;
+				if (variantStart < variantEnd) {
+					category = String.join(".", Arrays.copyOfRange(parts, variantStart, variantEnd));
+					if (category != null && category.isBlank()) {
+						category = null;
+					}
+				}
+			}
+		}
+		return new CampaignDescriptor(platform, category);
+	}
+
+	private static final class CampaignDescriptor {
+		private final String platform;
+		private final String category;
+
+		private CampaignDescriptor(String platform, String category) {
+			this.platform = platform;
+			this.category = category;
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -34,6 +35,14 @@ public class MetricsController {
 		@RequestParam(name = "hours", defaultValue = "24") int hours
 	) {
 		return ResponseEntity.ok(metricsService.actionsSummary(MetricsService.DurationRange.lastHours(hours), customerId));
+	}
+
+	@GetMapping("/errors")
+	public ResponseEntity<Map<String, Object>> errors(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "hours", defaultValue = "24") int hours
+	) {
+		return ResponseEntity.ok(metricsService.errorSummary(MetricsService.DurationRange.lastHours(hours), customerId));
 	}
 
 	@GetMapping("/people-reached")
@@ -120,6 +129,22 @@ public class MetricsController {
 	) {
 		long value = metricsService.campaignsCount(MetricsService.DurationRange.lastHours(hours), customerId);
 		return ResponseEntity.ok(Map.of("campaigns", value));
+	}
+
+	@GetMapping("/accounts/last-device")
+	public ResponseEntity<Map<String, Object>> lastDevice(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "account") String account,
+		@RequestParam(name = "tz", defaultValue = "America/Sao_Paulo") String tz
+	) {
+		return metricsService.lastDeviceForAccount(customerId, account, tz)
+			.map(map -> {
+				Map<String, Object> body = new LinkedHashMap<>();
+				body.put("lastUsedAt", map.get("lastUsedAt"));
+				body.put("lastUsedAtLocal", map.get("lastUsedAtLocal"));
+				return ResponseEntity.ok(body);
+			})
+			.orElseGet(() -> ResponseEntity.ok(Map.of("message", "Conta nunca utilizada")));
 	}
 }
 

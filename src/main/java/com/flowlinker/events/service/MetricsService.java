@@ -2,7 +2,6 @@ package com.flowlinker.events.service;
 
 import com.flowlinker.events.persistence.EventDocument;
 import com.flowlinker.events.projection.activity.*;
-import com.flowlinker.events.projection.campaign.CampaignStartedDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -17,11 +16,14 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 @Service
 public class MetricsService {
 
 	private static final Logger log = LoggerFactory.getLogger(MetricsService.class);
+
+	private static final Pattern CAMPAIGN_STARTED_PATTERN = Pattern.compile("\\.campaign(\\.[^.]+)*\\.started$", Pattern.CASE_INSENSITIVE);
 
 	private final MongoTemplate mongoTemplate;
 
@@ -45,21 +47,30 @@ public class MetricsService {
 		return map;
 	}
 
+	public Map<String, Object> errorSummary(DurationRange range, String customerId) {
+		Instant from = range.from();
+		Instant to = range.to();
+		long actions = countShareBatch(customerId, from, to);
+		long errors = countActivityErrors(customerId, from, to);
+		double errorRate = (actions + errors) == 0 ? 0.0 : (errors * 100.0) / (actions + errors);
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("errors", errors);
+		map.put("referenceActions", actions);
+		map.put("errorRate", errorRate);
+		return map;
+	}
+
 	public Map<String, Long> actionsSummary(DurationRange range, String customerId) {
 		Instant from = range.from();
 		Instant to = range.to();
 		long shares = 0;
-		long extractions = 0;
+		long extractions;
 		try {
 			shares = countShareBatch(customerId, from, to);
 		} catch (DataAccessException e) {
 			log.warn("Falha ao contar shares", e);
 		}
-		try {
-			extractions = mongoTemplate.count(timeRangeCustomer(customerId, from, to), com.flowlinker.events.projection.campaign.CampaignStartedDocument.class);
-		} catch (DataAccessException e) {
-			log.warn("Falha ao contar extractions", e);
-		}
+		extractions = campaignsCount(range, customerId);
 		long instagramLikes = 0;
 		long instagramComments = 0;
 		long total = shares + extractions + instagramLikes + instagramComments;
@@ -82,10 +93,11 @@ public class MetricsService {
 		Instant from = range.from();
 		Instant to = range.to();
 		Query query = timeRangeCustomer(customerId, from, to);
+		query.addCriteria(Criteria.where("eventType").regex(CAMPAIGN_STARTED_PATTERN));
 		try {
-			return mongoTemplate.count(query, CampaignStartedDocument.class);
+			return mongoTemplate.count(query, EventDocument.class);
 		} catch (DataAccessException e) {
-			log.warn("Falha ao contar CampaignStarted", e);
+			log.warn("Falha ao contar campanhas iniciadas", e);
 			return 0;
 		}
 	}
@@ -318,9 +330,18 @@ public class MetricsService {
 
 
 	private <T> Optional<T> findLatest(String customerId, Class<T> type) {
+		return findLatest(customerId, null, type);
+	}
+
+	private <T> Optional<T> findLatest(String customerId, String account, Class<T> type) {
 		try {
-			Query q = Query.query(Criteria.where("customerId").is(customerId))
-				.with(Sort.by(Sort.Direction.DESC, "eventAt")).limit(1);
+			Criteria criteria = Criteria.where("customerId").is(customerId);
+			if (account != null) {
+				criteria = criteria.and("account").is(account);
+			}
+			Query q = Query.query(criteria)
+				.with(Sort.by(Sort.Direction.DESC, "eventAt"))
+				.limit(1);
 			return Optional.ofNullable(mongoTemplate.findOne(q, type));
 		} catch (DataAccessException e) {
 			log.warn("Falha ao consultar mais recente de {}", type.getSimpleName(), e);
@@ -683,6 +704,28 @@ public class MetricsService {
 		if (v instanceof Number) return ((Number) v).intValue();
 		try { return Integer.parseInt(String.valueOf(v)); } catch (Exception e) { return null; }
 	}
+
+	public Optional<Map<String, Object>> lastDeviceForAccount(String customerId, String account, String zoneId) {
+		if (customerId == null || customerId.isBlank()) {
+			return Optional.empty();
+		}
+		if (account == null || account.isBlank()) {
+			return Optional.empty();
+		}
+		ZoneId zone = safeZone(zoneId);
+		return findLatest(customerId, account, ActivitySessionStartedDocument.class)
+			.map(doc -> usageInfo(Optional.ofNullable(doc.getEventAt()).orElse(doc.getReceivedAt()), zone))
+			.or(() -> findLatest(customerId, account, ActivityShareBatchDocument.class)
+				.map(doc -> usageInfo(Optional.ofNullable(doc.getEventAt()).orElse(doc.getReceivedAt()), zone)));
+	}
+
+	private Map<String, Object> usageInfo(Instant ts, ZoneId zone) {
+		Map<String, Object> data = new LinkedHashMap<>();
+		data.put("lastUsedAt", ts);
+		data.put("lastUsedAtLocal", ts == null ? null : ts.atZone(zone).toString());
+		return data;
+	}
+
 
 	public static class DurationRange {
 		private final Instant from;
