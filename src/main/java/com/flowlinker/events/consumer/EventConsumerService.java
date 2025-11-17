@@ -45,6 +45,8 @@ public class EventConsumerService {
 	private final ActivitySessionEndedRepository activitySessionEndedRepository;
 	private final ActivityAccountCreatedRepository activityAccountCreatedRepository;
 	private final ActivityAccountUpdatedRepository activityAccountUpdatedRepository;
+	private final ActivityAccountSuspendedRepository activityAccountSuspendedRepository;
+	private final ActivityAccountBlockedRepository activityAccountBlockedRepository;
 	private final ActivityShareBatchRepository activityShareBatchRepository;
 	private final ActivityErrorRepository activityErrorRepository;
 	private final ActivityExtractionStartedRepository activityExtractionStartedRepository;
@@ -70,6 +72,8 @@ public class EventConsumerService {
 		ActivitySessionEndedRepository activitySessionEndedRepository,
 		ActivityAccountCreatedRepository activityAccountCreatedRepository,
 		ActivityAccountUpdatedRepository activityAccountUpdatedRepository,
+		ActivityAccountSuspendedRepository activityAccountSuspendedRepository,
+		ActivityAccountBlockedRepository activityAccountBlockedRepository,
 		ActivityShareBatchRepository activityShareBatchRepository,
 		ActivityErrorRepository activityErrorRepository,
 		ActivityExtractionStartedRepository activityExtractionStartedRepository,
@@ -87,6 +91,8 @@ public class EventConsumerService {
 		this.activitySessionEndedRepository = activitySessionEndedRepository;
 		this.activityAccountCreatedRepository = activityAccountCreatedRepository;
 		this.activityAccountUpdatedRepository = activityAccountUpdatedRepository;
+		this.activityAccountSuspendedRepository = activityAccountSuspendedRepository;
+		this.activityAccountBlockedRepository = activityAccountBlockedRepository;
 		this.activityShareBatchRepository = activityShareBatchRepository;
 		this.activityErrorRepository = activityErrorRepository;
 		this.activityExtractionStartedRepository = activityExtractionStartedRepository;
@@ -227,6 +233,30 @@ public class EventConsumerService {
 				d.setChanges(null);
 			}
 			saveIgnoreDup(new SaveOp() { public void run() { activityAccountUpdatedRepository.save(d); } });
+		} else if ("desktop.activity.account_suspended".equals(type)) {
+			ActivityAccountSuspendedDocument d = new ActivityAccountSuspendedDocument();
+			fillMeta(d, e);
+			String platform = s(p.get("platform"));
+			if (platform == null) platform = s(p.get("source"));
+			if (platform == null && type.startsWith("desktop")) {
+				platform = "DESKTOP";
+			}
+			d.setPlatform(platform);
+			d.setAccount(s(p.get("account")));
+			d.setReason(s(p.get("reason")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityAccountSuspendedRepository.save(d); } });
+		} else if ("desktop.activity.account_blocked".equals(type)) {
+			ActivityAccountBlockedDocument d = new ActivityAccountBlockedDocument();
+			fillMeta(d, e);
+			String platform = s(p.get("platform"));
+			if (platform == null) platform = s(p.get("source"));
+			if (platform == null && type.startsWith("desktop")) {
+				platform = "DESKTOP";
+			}
+			d.setPlatform(platform);
+			d.setAccount(s(p.get("account")));
+			d.setReason(s(p.get("reason")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityAccountBlockedRepository.save(d); } });
 		} else if ("facebook.activity.extraction.started".equals(type)) {
 			ActivityExtractionStartedDocument d = new ActivityExtractionStartedDocument();
 			fillMeta(d, e);
@@ -352,6 +382,14 @@ public class EventConsumerService {
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityAccountUpdatedDocument) {
 			ActivityAccountUpdatedDocument d = (ActivityAccountUpdatedDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityAccountSuspendedDocument) {
+			ActivityAccountSuspendedDocument d = (ActivityAccountSuspendedDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityAccountBlockedDocument) {
+			ActivityAccountBlockedDocument d = (ActivityAccountBlockedDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityShareBatchDocument) {

@@ -146,6 +146,50 @@ public class MetricsController {
 			})
 			.orElseGet(() -> ResponseEntity.ok(Map.of("message", "Conta nunca utilizada")));
 	}
+
+	@GetMapping("/accounts/suspension-status")
+	public ResponseEntity<Map<String, Object>> suspensionStatus(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "account") String account,
+		@RequestParam(name = "tz", defaultValue = "America/Sao_Paulo") String tz
+	) {
+		return metricsService.accountSuspensionStatus(customerId, account, tz)
+			.map(map -> {
+				Map<String, Object> body = new LinkedHashMap<>();
+				body.put("suspendedSince", map.get("suspendedSince"));
+				body.put("suspendedSinceLocal", map.get("suspendedSinceLocal"));
+				body.put("now", map.get("now"));
+				body.put("nowLocal", map.get("nowLocal"));
+				body.put("durationSeconds", map.get("durationSeconds"));
+				body.put("durationMinutes", map.get("durationMinutes"));
+				body.put("durationHours", map.get("durationHours"));
+				body.put("reason", map.get("reason"));
+				return ResponseEntity.ok(body);
+			})
+			.orElseGet(() -> ResponseEntity.ok(Map.of("message", "Conta não está suspensa ou nunca foi suspensa")));
+	}
+
+	@GetMapping("/accounts/block-status")
+	public ResponseEntity<Map<String, Object>> blockStatus(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "account") String account,
+		@RequestParam(name = "tz", defaultValue = "America/Sao_Paulo") String tz
+	) {
+		return metricsService.accountBlockStatus(customerId, account, tz)
+			.map(map -> {
+				Map<String, Object> body = new LinkedHashMap<>();
+				body.put("blockedSince", map.get("blockedSince"));
+				body.put("blockedSinceLocal", map.get("blockedSinceLocal"));
+				body.put("now", map.get("now"));
+				body.put("nowLocal", map.get("nowLocal"));
+				body.put("durationSeconds", map.get("durationSeconds"));
+				body.put("durationMinutes", map.get("durationMinutes"));
+				body.put("durationHours", map.get("durationHours"));
+				body.put("reason", map.get("reason"));
+				return ResponseEntity.ok(body);
+			})
+			.orElseGet(() -> ResponseEntity.ok(Map.of("message", "Conta não está bloqueada ou nunca foi bloqueada")));
+	}
 }
 
 

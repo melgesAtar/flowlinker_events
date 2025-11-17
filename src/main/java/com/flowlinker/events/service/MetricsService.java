@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.regex.Pattern;
@@ -717,6 +718,66 @@ public class MetricsService {
 			.map(doc -> usageInfo(Optional.ofNullable(doc.getEventAt()).orElse(doc.getReceivedAt()), zone))
 			.or(() -> findLatest(customerId, account, ActivityShareBatchDocument.class)
 				.map(doc -> usageInfo(Optional.ofNullable(doc.getEventAt()).orElse(doc.getReceivedAt()), zone)));
+	}
+
+	public Optional<Map<String, Object>> accountSuspensionStatus(String customerId, String account, String zoneId) {
+		if (customerId == null || customerId.isBlank()) {
+			return Optional.empty();
+		}
+		if (account == null || account.isBlank()) {
+			return Optional.empty();
+		}
+		ZoneId zone = safeZone(zoneId);
+		return findLatest(customerId, account, ActivityAccountSuspendedDocument.class)
+			.map(doc -> {
+				Instant startedAt = Optional.ofNullable(doc.getEventAt()).orElse(doc.getReceivedAt());
+				if (startedAt == null) {
+					return null;
+				}
+				Instant now = Instant.now();
+				Duration duration = Duration.between(startedAt, now);
+				Map<String, Object> data = new LinkedHashMap<>();
+				data.put("suspendedSince", startedAt);
+				data.put("suspendedSinceLocal", startedAt.atZone(zone).toString());
+				data.put("now", now);
+				data.put("nowLocal", now.atZone(zone).toString());
+				long seconds = duration.getSeconds();
+				data.put("durationSeconds", seconds);
+				data.put("durationMinutes", seconds / 60);
+				data.put("durationHours", seconds / 3600);
+				data.put("reason", doc.getReason());
+				return data;
+			});
+	}
+
+	public Optional<Map<String, Object>> accountBlockStatus(String customerId, String account, String zoneId) {
+		if (customerId == null || customerId.isBlank()) {
+			return Optional.empty();
+		}
+		if (account == null || account.isBlank()) {
+			return Optional.empty();
+		}
+		ZoneId zone = safeZone(zoneId);
+		return findLatest(customerId, account, ActivityAccountBlockedDocument.class)
+			.map(doc -> {
+				Instant startedAt = Optional.ofNullable(doc.getEventAt()).orElse(doc.getReceivedAt());
+				if (startedAt == null) {
+					return null;
+				}
+				Instant now = Instant.now();
+				Duration duration = Duration.between(startedAt, now);
+				Map<String, Object> data = new LinkedHashMap<>();
+				data.put("blockedSince", startedAt);
+				data.put("blockedSinceLocal", startedAt.atZone(zone).toString());
+				data.put("now", now);
+				data.put("nowLocal", now.atZone(zone).toString());
+				long seconds = duration.getSeconds();
+				data.put("durationSeconds", seconds);
+				data.put("durationMinutes", seconds / 60);
+				data.put("durationHours", seconds / 3600);
+				data.put("reason", doc.getReason());
+				return data;
+			});
 	}
 
 	private Map<String, Object> usageInfo(Instant ts, ZoneId zone) {
