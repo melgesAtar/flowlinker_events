@@ -108,6 +108,8 @@ public class MetricsService {
 		List<Map<String, Object>> items = new ArrayList<>();
 		Sort sort = Sort.by(Sort.Direction.DESC, "eventAt");
 		List<EventDocument> events = Collections.emptyList();
+		// controla quantas vezes cada tipo de atividade aparece para evitar poluição visual
+		Map<String, Integer> typeCounts = new HashMap<>();
 
 		try {
 			Query query = Query.query(Criteria.where("customerId").is(customerId))
@@ -123,6 +125,16 @@ public class MetricsService {
 			if (mapped == null) {
 				continue;
 			}
+			String key = String.valueOf(mapped.getOrDefault("type", mapped.get("eventType")));
+			if (key == null || key.isBlank()) {
+				key = "generic";
+			}
+			int current = typeCounts.getOrDefault(key, 0);
+			if (current >= 3) {
+				// já temos muitas ocorrências deste tipo; pula para não poluir a lista
+				continue;
+			}
+			typeCounts.put(key, current + 1);
 			items.add(mapped);
 			if (items.size() >= limit) {
 				break;
@@ -146,10 +158,277 @@ public class MetricsService {
 			ts = Instant.now();
 		}
 
-		String account = Optional.ofNullable(s(payload.get("account"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+		// identificador de conta: tenta "account", depois "username" e por fim "name"
+		String account = Optional.ofNullable(s(payload.get("account")))
+			.map(String::trim).filter(v -> !v.isEmpty())
+			.orElseGet(() -> Optional.ofNullable(s(payload.get("username")))
+				.map(String::trim).filter(v -> !v.isEmpty())
+				.orElseGet(() -> Optional.ofNullable(s(payload.get("name")))
+					.map(String::trim).filter(v -> !v.isEmpty()).orElse(null)));
 		String platform = Optional.ofNullable(s(payload.get("platform"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
 		if (platform == null) {
 			platform = Optional.ofNullable(s(payload.get("source"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+		}
+
+		// Eventos de login - sucesso (modelo novo + legado desktop)
+		if ("security.auth.login".equals(type)
+			|| "auth.security.login".equals(type)
+			|| "desktop.security.login_success".equals(type)
+			|| "desktop.security.login.success".equals(type)) {
+			String username = Optional.ofNullable(s(payload.get("username"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String acct = Optional.ofNullable(account).filter(v -> !v.isBlank())
+				.orElse(Optional.ofNullable(s(payload.get("account"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null));
+			String actor = username != null
+				? username
+				: (acct != null ? acct : Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("desconhecido"));
+			String source = Optional.ofNullable(s(payload.get("source"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String effectivePlatform = Optional.ofNullable(platform).filter(v -> !v.isBlank())
+				.orElseGet(() -> {
+					if (type.startsWith("desktop")) return "DESKTOP";
+					if (type.startsWith("facebook")) return "FACEBOOK";
+					if ("device".equalsIgnoreCase(source)) return "DEVICE";
+					if ("web".equalsIgnoreCase(source)) return "WEB";
+					return "DESCONHECIDO";
+				});
+
+			// mensagem específica para device x web
+			// prioridade: deviceName (novo) -> nameDevice (legado) -> hostname -> deviceId
+			String deviceName = Optional.ofNullable(s(payload.get("deviceName")))
+				.map(String::trim).filter(v -> !v.isEmpty())
+				.orElseGet(() -> Optional.ofNullable(s(payload.get("nameDevice")))
+					.map(String::trim).filter(v -> !v.isEmpty())
+					.orElseGet(() -> Optional.ofNullable(s(payload.get("hostname")))
+						.map(String::trim).filter(v -> !v.isEmpty()).orElse(null)));
+			String text;
+			if ("web".equalsIgnoreCase(source)) {
+				String ipUser = Optional.ofNullable(ip).filter(v -> !v.isBlank()).orElse("IP desconhecido");
+				text = String.format("Login realizado com sucesso no painel web IP: %s", ipUser);
+			} else {
+				String name = deviceName != null
+					? deviceName
+					: Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("dispositivo");
+				text = String.format("Login realizado com sucesso no dispositivo: %s", name);
+			}
+
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "login.success");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			entry.put("username", username);
+			entry.put("account", acct);
+			entry.put("source", source);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("security.auth.login_failed".equals(type)
+			|| "auth.security.login_failed".equals(type)
+			|| "desktop.security.login_failed".equals(type)
+			|| "desktop.security.login.failed".equals(type)) {
+			String username = Optional.ofNullable(s(payload.get("username"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String acct = Optional.ofNullable(account).filter(v -> !v.isBlank())
+				.orElse(Optional.ofNullable(s(payload.get("account"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null));
+			String actor = username != null
+				? username
+				: (acct != null ? acct : Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("desconhecido"));
+
+			String source = Optional.ofNullable(s(payload.get("source"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+
+			String reason = Optional.ofNullable(s(payload.get("reason"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String message = Optional.ofNullable(s(payload.get("message"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+
+			// Tenta usar mensagem já em português, senão traduz o reason
+			String reasonLabel;
+			if (message != null) {
+				reasonLabel = message;
+			} else if (reason != null) {
+				String r = reason.toLowerCase(Locale.ROOT);
+				if ("invalid_credentials".equals(r) || "invalidcredential".equals(r)) {
+					reasonLabel = "credenciais inválidas";
+				} else if ("access_denied".equals(r)) {
+					reasonLabel = "acesso negado";
+				} else if ("server_unavailable".equals(r) || "service_unavailable".equals(r)) {
+					reasonLabel = "servidor indisponível";
+				} else if ("account_locked".equals(r)) {
+					reasonLabel = "conta bloqueada";
+				} else if ("account_disabled".equals(r)) {
+					reasonLabel = "conta desativada";
+				} else {
+					reasonLabel = reason;
+				}
+			} else {
+				reasonLabel = "motivo desconhecido";
+			}
+
+			// nome de dispositivo (quando source=device ou desktop)
+			// prioridade: deviceName (novo) -> nameDevice (legado) -> hostname -> deviceId
+			String deviceName = Optional.ofNullable(s(payload.get("deviceName")))
+				.map(String::trim).filter(v -> !v.isEmpty())
+				.orElseGet(() -> Optional.ofNullable(s(payload.get("nameDevice")))
+					.map(String::trim).filter(v -> !v.isEmpty())
+					.orElseGet(() -> Optional.ofNullable(s(payload.get("hostname")))
+						.map(String::trim).filter(v -> !v.isEmpty()).orElse(null)));
+
+			String text;
+			if ("web".equalsIgnoreCase(source)) {
+				String ipUser = Optional.ofNullable(ip).filter(v -> !v.isBlank()).orElse("IP desconhecido");
+				text = String.format("Falha no login feito no painel web IP: %s, motivo: %s", ipUser, reasonLabel);
+			} else {
+				String name = deviceName != null
+					? deviceName
+					: Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("dispositivo");
+				text = String.format("Falha no login feito no dispositivo: %s, motivo: %s", name, reasonLabel);
+			}
+
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "login.failed");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("username", username);
+			entry.put("account", acct);
+			entry.put("reason", reason);
+			entry.put("message", message);
+			entry.put("source", source);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("auth.security.device_changed".equals(type)
+			|| "security.auth.device_changed".equals(type)) {
+			String username = Optional.ofNullable(s(payload.get("username"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String actor = username != null
+				? username
+				: Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("desconhecido");
+			String source = Optional.ofNullable(s(payload.get("source"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String effectivePlatform = Optional.ofNullable(platform).filter(v -> !v.isBlank())
+				.orElseGet(() -> {
+					if ("device".equalsIgnoreCase(source)) return "DEVICE";
+					if ("web".equalsIgnoreCase(source)) return "WEB";
+					return "DESCONHECIDO";
+				});
+			String text = String.format("Mudança de dispositivo detectada (%s)", effectivePlatform);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "device.changed");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			entry.put("username", username);
+			entry.put("source", source);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if (type.contains(".campaign.") && type.endsWith(".started")) {
+			String actor = account == null || account.isBlank()
+				? Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("sistema")
+				: account;
+			String effectivePlatform = platform;
+			if (effectivePlatform == null || effectivePlatform.isBlank()) {
+				String[] parts = type.split("\\.");
+				if (parts.length > 0) {
+					effectivePlatform = parts[0].toUpperCase(Locale.ROOT);
+				} else {
+					effectivePlatform = "DESCONHECIDO";
+				}
+			}
+			Long campaignId = asLong(payload.get("campaignId"));
+			Integer total = i(payload.get("total"));
+			String text = String.format("Campanha iniciada (%s)", effectivePlatform);
+			if (total != null) {
+				text = String.format("Campanha iniciada (%s) - %d itens previstos", effectivePlatform, total);
+			}
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "campaign.started");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			if (campaignId != null) {
+				entry.put("campaignId", campaignId);
+			}
+			if (total != null) {
+				entry.put("total", total);
+			}
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if (type.contains(".campaign.") && type.endsWith(".progress")) {
+			String actor = account == null || account.isBlank()
+				? Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("sistema")
+				: account;
+			String effectivePlatform = platform;
+			if (effectivePlatform == null || effectivePlatform.isBlank()) {
+				String[] parts = type.split("\\.");
+				if (parts.length > 0) {
+					effectivePlatform = parts[0].toUpperCase(Locale.ROOT);
+				} else {
+					effectivePlatform = "DESCONHECIDO";
+				}
+			}
+			Long campaignId = asLong(payload.get("campaignId"));
+			Long lastIndex = asLong(payload.get("lastProcessedIndex"));
+			Integer total = i(payload.get("total"));
+			String text;
+			if (lastIndex != null && total != null) {
+				text = String.format("Campanha em andamento (%s) - %d de %d itens", effectivePlatform, lastIndex, total);
+			} else if (lastIndex != null) {
+				text = String.format("Campanha em andamento (%s) - %d itens processados", effectivePlatform, lastIndex);
+			} else {
+				text = String.format("Campanha em andamento (%s)", effectivePlatform);
+			}
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "campaign.progress");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			if (campaignId != null) {
+				entry.put("campaignId", campaignId);
+			}
+			if (lastIndex != null) {
+				entry.put("lastProcessedIndex", lastIndex);
+			}
+			if (total != null) {
+				entry.put("total", total);
+			}
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if (type.contains(".campaign.") && type.endsWith(".completed")) {
+			String actor = account == null || account.isBlank()
+				? Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("sistema")
+				: account;
+			String effectivePlatform = platform;
+			if (effectivePlatform == null || effectivePlatform.isBlank()) {
+				String[] parts = type.split("\\.");
+				if (parts.length > 0) {
+					effectivePlatform = parts[0].toUpperCase(Locale.ROOT);
+				} else {
+					effectivePlatform = "DESCONHECIDO";
+				}
+			}
+			Long campaignId = asLong(payload.get("campaignId"));
+			Long lastIndex = asLong(payload.get("lastProcessedIndex"));
+			Integer total = i(payload.get("total"));
+			String text;
+			if (lastIndex != null && total != null) {
+				text = String.format("Campanha concluída (%s) - %d de %d itens", effectivePlatform, lastIndex, total);
+			} else {
+				text = String.format("Campanha concluída (%s)", effectivePlatform);
+			}
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "campaign.completed");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			if (campaignId != null) {
+				entry.put("campaignId", campaignId);
+			}
+			if (lastIndex != null) {
+				entry.put("lastProcessedIndex", lastIndex);
+			}
+			if (total != null) {
+				entry.put("total", total);
+			}
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
 		}
 
 		if ("facebook.activity.share_batch".equals(type) || "facebook.activity.share.batch".equals(type)) {
@@ -265,13 +544,61 @@ public class MetricsService {
 			entry.put("deviceId", deviceId);
 			entry.put("ip", ip);
 			return entry;
+		} else if ("device.activity.created".equals(type)) {
+			String fp = Optional.ofNullable(s(payload.get("fingerprint"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String osName = Optional.ofNullable(s(payload.get("osName"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String appVersion = Optional.ofNullable(s(payload.get("appVersion"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			String actor = Optional.ofNullable(deviceId).filter(v -> !v.isBlank())
+				.orElse(fp != null ? fp : "dispositivo");
+			StringBuilder sb = new StringBuilder("Novo dispositivo registrado");
+			if (osName != null || appVersion != null) {
+				sb.append(" (");
+				if (osName != null) {
+					sb.append(osName);
+				}
+				if (appVersion != null) {
+					if (osName != null) sb.append(" - ");
+					sb.append("versão ").append(appVersion);
+				}
+				sb.append(")");
+			}
+			String text = sb.toString();
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "device.created");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("fingerprint", fp);
+			entry.put("osName", osName);
+			entry.put("appVersion", appVersion);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("device.activity.renamed".equals(type)) {
+			String oldName = Optional.ofNullable(s(payload.get("oldName"))).map(String::trim).filter(v -> !v.isEmpty()).orElse("nome anterior");
+			String newName = Optional.ofNullable(s(payload.get("newName"))).map(String::trim).filter(v -> !v.isEmpty()).orElse("novo nome");
+			String actor = Optional.ofNullable(deviceId).filter(v -> !v.isBlank()).orElse("dispositivo");
+			String text = String.format("Dispositivo renomeado: %s → %s", oldName, newName);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "device.renamed");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("oldName", oldName);
+			entry.put("newName", newName);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
 		} else if ("facebook.activity.account_created".equals(type)
 			|| "activity_account_created".equals(type)
 			|| "desktop.activity.account_created".equals(type)
-			|| "desktop.activity.account.created".equals(type)) {
+			|| "desktop.activity.account.created".equals(type)
+			|| "desktop.activity.social_media_account_created".equals(type)) {
 			String actor = account == null || account.isBlank() ? "desconhecido" : account;
 			String effectivePlatform = platform == null || platform.isBlank() ? "DESCONHECIDO" : platform;
-			String profileName = Optional.ofNullable(s(payload.get("profileName"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
+			// novo formato envia "name" em vez de profileName; mantemos compatibilidade
+			String profileName = Optional.ofNullable(s(payload.get("profileName")))
+				.map(String::trim).filter(v -> !v.isEmpty())
+				.orElseGet(() -> Optional.ofNullable(s(payload.get("name")))
+					.map(String::trim).filter(v -> !v.isEmpty()).orElse(null));
 			String text = String.format("Conta cadastrada (%s)", effectivePlatform);
 			Map<String, Object> entry = activityItem(ts, zone, actor, text);
 			entry.put("type", "account.created");
@@ -308,6 +635,36 @@ public class MetricsService {
 			if (changes != null && !changes.isEmpty()) {
 				entry.put("changes", changes);
 			}
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("desktop.activity.account_suspended".equals(type)) {
+			String actor = account == null || account.isBlank() ? "desconhecido" : account;
+			String effectivePlatform = platform == null || platform.isBlank() ? "DESKTOP" : platform;
+			String reason = Optional.ofNullable(s(payload.get("reason"))).map(String::trim).filter(v -> !v.isEmpty()).orElse("motivo não informado");
+			String text = String.format("Conta suspensa (%s) - %s", effectivePlatform, reason);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "account.suspended");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			entry.put("account", actor);
+			entry.put("reason", reason);
+			entry.put("deviceId", deviceId);
+			entry.put("ip", ip);
+			return entry;
+		} else if ("desktop.activity.account_blocked".equals(type)) {
+			String actor = account == null || account.isBlank() ? "desconhecido" : account;
+			String effectivePlatform = platform == null || platform.isBlank() ? "DESKTOP" : platform;
+			String reason = Optional.ofNullable(s(payload.get("reason"))).map(String::trim).filter(v -> !v.isEmpty()).orElse("motivo não informado");
+			String text = String.format("Conta bloqueada (%s) - %s", effectivePlatform, reason);
+			Map<String, Object> entry = activityItem(ts, zone, actor, text);
+			entry.put("type", "account.blocked");
+			entry.put("eventType", type);
+			entry.put("eventId", eventId);
+			entry.put("platform", effectivePlatform);
+			entry.put("account", actor);
+			entry.put("reason", reason);
 			entry.put("deviceId", deviceId);
 			entry.put("ip", ip);
 			return entry;

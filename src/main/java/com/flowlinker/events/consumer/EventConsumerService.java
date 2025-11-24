@@ -277,15 +277,22 @@ public class EventConsumerService {
 		} else if ("facebook.activity.account_created".equals(type)
 				|| "activity_account_created".equals(type)
 				|| "desktop.activity.account_created".equals(type)
-				|| "desktop.activity.account.created".equals(type)) {
+				|| "desktop.activity.account.created".equals(type)
+				|| "desktop.activity.social_media_account_created".equals(type)) {
 			ActivityAccountCreatedDocument d = new ActivityAccountCreatedDocument();
 			fillMeta(d, e);
 			// tenta platform, senão usa source para manter compatibilidade com o desktop
 			String platform = s(p.get("platform"));
 			if (platform == null) platform = s(p.get("source"));
 			d.setPlatform(platform);
-			d.setAccount(s(p.get("account")));
-			d.setProfileName(s(p.get("profileName")));
+			// novo formato envia username/name, mas mantemos compatibilidade com account/profileName
+			String accountValue = s(p.get("account"));
+			if (accountValue == null) accountValue = s(p.get("username"));
+			if (accountValue == null) accountValue = s(p.get("name"));
+			d.setAccount(accountValue);
+			String profileName = s(p.get("profileName"));
+			if (profileName == null) profileName = s(p.get("name"));
+			d.setProfileName(profileName);
 			saveIgnoreDup(new SaveOp() { public void run() { activityAccountCreatedRepository.save(d); } });
 		} else if ("facebook.activity.account_updated".equals(type)
 				|| "desktop.activity.account_updated".equals(type)
