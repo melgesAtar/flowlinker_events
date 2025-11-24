@@ -14,6 +14,8 @@ import com.flowlinker.events.projection.security.SecurityLoginFailedDocument;
 import com.flowlinker.events.projection.security.SecurityLoginFailedRepository;
 import com.flowlinker.events.projection.security.SecurityLoginSuccessDocument;
 import com.flowlinker.events.projection.security.SecurityLoginSuccessRepository;
+import com.flowlinker.events.projection.security.SecurityDeviceChangedDocument;
+import com.flowlinker.events.projection.security.SecurityDeviceChangedRepository;
 import com.flowlinker.events.projection.activity.ActivityExtractionStartedRepository;
 import com.flowlinker.events.projection.activity.ActivityExtractionStartedDocument;
 import com.flowlinker.events.projection.activity.ActivityExtractionPausedRepository;
@@ -22,6 +24,10 @@ import com.flowlinker.events.projection.activity.ActivityExtractionCancelledRepo
 import com.flowlinker.events.projection.activity.ActivityExtractionCancelledDocument;
 import com.flowlinker.events.projection.activity.ActivityExtractionCompletedRepository;
 import com.flowlinker.events.projection.activity.ActivityExtractionCompletedDocument;
+import com.flowlinker.events.projection.activity.ActivityDeviceCreatedDocument;
+import com.flowlinker.events.projection.activity.ActivityDeviceCreatedRepository;
+import com.flowlinker.events.projection.activity.ActivityDeviceRenamedDocument;
+import com.flowlinker.events.projection.activity.ActivityDeviceRenamedRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -41,6 +47,7 @@ public class EventConsumerService {
 	private final EventRepository eventRepository;
 	private final SecurityLoginSuccessRepository securityLoginSuccessRepository;
 	private final SecurityLoginFailedRepository securityLoginFailedRepository;
+	private final SecurityDeviceChangedRepository securityDeviceChangedRepository;
 	private final ActivitySessionStartedRepository activitySessionStartedRepository;
 	private final ActivitySessionEndedRepository activitySessionEndedRepository;
 	private final ActivityAccountCreatedRepository activityAccountCreatedRepository;
@@ -53,6 +60,8 @@ public class EventConsumerService {
 	private final ActivityExtractionPausedRepository activityExtractionPausedRepository;
 	private final ActivityExtractionCancelledRepository activityExtractionCancelledRepository;
 	private final ActivityExtractionCompletedRepository activityExtractionCompletedRepository;
+	private final ActivityDeviceCreatedRepository activityDeviceCreatedRepository;
+	private final ActivityDeviceRenamedRepository activityDeviceRenamedRepository;
 	private final CampaignStartedRepository campaignStartedRepository;
 	private final CampaignProgressRepository campaignProgressRepository;
 	private final CampaignCompletedRepository campaignCompletedRepository;
@@ -68,6 +77,7 @@ public class EventConsumerService {
 		EventRepository eventRepository,
 		SecurityLoginSuccessRepository securityLoginSuccessRepository,
 		SecurityLoginFailedRepository securityLoginFailedRepository,
+		SecurityDeviceChangedRepository securityDeviceChangedRepository,
 		ActivitySessionStartedRepository activitySessionStartedRepository,
 		ActivitySessionEndedRepository activitySessionEndedRepository,
 		ActivityAccountCreatedRepository activityAccountCreatedRepository,
@@ -80,6 +90,8 @@ public class EventConsumerService {
 		ActivityExtractionPausedRepository activityExtractionPausedRepository,
 		ActivityExtractionCancelledRepository activityExtractionCancelledRepository,
 		ActivityExtractionCompletedRepository activityExtractionCompletedRepository,
+		ActivityDeviceCreatedRepository activityDeviceCreatedRepository,
+		ActivityDeviceRenamedRepository activityDeviceRenamedRepository,
 		CampaignStartedRepository campaignStartedRepository,
 		CampaignProgressRepository campaignProgressRepository,
 		CampaignCompletedRepository campaignCompletedRepository
@@ -87,6 +99,7 @@ public class EventConsumerService {
 		this.eventRepository = eventRepository;
 		this.securityLoginSuccessRepository = securityLoginSuccessRepository;
 		this.securityLoginFailedRepository = securityLoginFailedRepository;
+		this.securityDeviceChangedRepository = securityDeviceChangedRepository;
 		this.activitySessionStartedRepository = activitySessionStartedRepository;
 		this.activitySessionEndedRepository = activitySessionEndedRepository;
 		this.activityAccountCreatedRepository = activityAccountCreatedRepository;
@@ -99,6 +112,8 @@ public class EventConsumerService {
 		this.activityExtractionPausedRepository = activityExtractionPausedRepository;
 		this.activityExtractionCancelledRepository = activityExtractionCancelledRepository;
 		this.activityExtractionCompletedRepository = activityExtractionCompletedRepository;
+		this.activityDeviceCreatedRepository = activityDeviceCreatedRepository;
+		this.activityDeviceRenamedRepository = activityDeviceRenamedRepository;
 		this.campaignStartedRepository = campaignStartedRepository;
 		this.campaignProgressRepository = campaignProgressRepository;
 		this.campaignCompletedRepository = campaignCompletedRepository;
@@ -172,7 +187,65 @@ public class EventConsumerService {
 		if (p == null) {
 			p = Collections.emptyMap();
 		}
-		if ("desktop.security.login_success".equals(type) || "desktop.security.login.success".equals(type)) {
+		if ("security.auth.login".equals(type) || "auth.security.login".equals(type)) {
+			SecurityLoginSuccessDocument d = new SecurityLoginSuccessDocument();
+			fillMeta(d, e);
+			String source = s(p.get("source"));
+			d.setSource(source);
+			d.setUsername(s(p.get("username")));
+			d.setRole(s(p.get("role")));
+			d.setUserAgent(s(p.get("userAgent")));
+			// variante web
+			if ("web".equalsIgnoreCase(source)) {
+				d.setOrigin(s(p.get("origin")));
+				d.setAuthTypeHeader(s(p.get("authTypeHeader")));
+			}
+			// variante device
+			if ("device".equalsIgnoreCase(source)) {
+				d.setFingerprint(s(p.get("fingerprint")));
+				d.setAppDeviceId(s(p.get("deviceId")));
+				d.setHwHash(s(p.get("hwHash")));
+				d.setOsName(s(p.get("osName")));
+				d.setOsVersion(s(p.get("osVersion")));
+				d.setArch(s(p.get("arch")));
+				d.setHostname(s(p.get("hostname")));
+				d.setAppVersion(s(p.get("appVersion")));
+				d.setStatus(s(p.get("status")));
+			}
+			saveIgnoreDup(new SaveOp() { public void run() { securityLoginSuccessRepository.save(d); } });
+		} else if ("security.auth.login_failed".equals(type) || "auth.security.login_failed".equals(type)) {
+			SecurityLoginFailedDocument d = new SecurityLoginFailedDocument();
+			fillMeta(d, e);
+			d.setSource(s(p.get("source")));
+			d.setUsername(s(p.get("username")));
+			d.setRole(s(p.get("role")));
+			d.setUserAgent(s(p.get("userAgent")));
+			d.setOrigin(s(p.get("origin")));
+			d.setFingerprint(s(p.get("fingerprint")));
+			d.setAppDeviceId(s(p.get("deviceId")));
+			d.setReason(s(p.get("reason")));
+			d.setMessage(s(p.get("message")));
+			saveIgnoreDup(new SaveOp() { public void run() { securityLoginFailedRepository.save(d); } });
+		} else if ("auth.security.device_changed".equals(type) || "security.auth.device_changed".equals(type)) {
+			SecurityDeviceChangedDocument d = new SecurityDeviceChangedDocument();
+			fillMeta(d, e);
+			d.setSource(s(p.get("source")));
+			d.setUsername(s(p.get("username")));
+			d.setFingerprint(s(p.get("fingerprint")));
+			d.setAppDeviceId(s(p.get("deviceId")));
+			d.setBaselineHwHash(s(p.get("baselineHwHash")));
+			d.setLastHwHash(s(p.get("lastHwHash")));
+			d.setNewHwHash(s(p.get("newHwHash")));
+			d.setDiffRatio(d(p.get("diffRatio")));
+			d.setOsName(s(p.get("osName")));
+			d.setOsVersion(s(p.get("osVersion")));
+			d.setArch(s(p.get("arch")));
+			d.setHostname(s(p.get("hostname")));
+			d.setAppVersion(s(p.get("appVersion")));
+			d.setStatus(s(p.get("status")));
+			d.setUserAgent(s(p.get("userAgent")));
+			saveIgnoreDup(new SaveOp() { public void run() { securityDeviceChangedRepository.save(d); } });
+		} else if ("desktop.security.login_success".equals(type) || "desktop.security.login.success".equals(type)) {
 			SecurityLoginSuccessDocument d = new SecurityLoginSuccessDocument();
 			fillMeta(d, e);
 			d.setPlatform(s(p.get("platform")));
@@ -289,6 +362,27 @@ public class EventConsumerService {
 			d.setTotalGroups(l(p.get("totalGroups")));
 			d.setTotalMembers(l(p.get("totalMembers")));
 			saveIgnoreDup(new SaveOp() { public void run() { activityExtractionCompletedRepository.save(d); } });
+		} else if ("device.activity.created".equals(type)) {
+			ActivityDeviceCreatedDocument d = new ActivityDeviceCreatedDocument();
+			fillMeta(d, e);
+			d.setSource(s(p.get("source")));
+			d.setFingerprint(s(p.get("fingerprint")));
+			d.setAppDeviceId(s(p.get("deviceId")));
+			d.setOsName(s(p.get("osName")));
+			d.setOsVersion(s(p.get("osVersion")));
+			d.setArch(s(p.get("arch")));
+			d.setHostname(s(p.get("hostname")));
+			d.setAppVersion(s(p.get("appVersion")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityDeviceCreatedRepository.save(d); } });
+		} else if ("device.activity.renamed".equals(type)) {
+			ActivityDeviceRenamedDocument d = new ActivityDeviceRenamedDocument();
+			fillMeta(d, e);
+			d.setSource(s(p.get("source")));
+			d.setFingerprint(s(p.get("fingerprint")));
+			d.setAppDeviceId(s(p.get("deviceId")));
+			d.setOldName(s(p.get("oldName")));
+			d.setNewName(s(p.get("newName")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityDeviceRenamedRepository.save(d); } });
 		} else if ("facebook.activity.share_batch".equals(type) || "facebook.activity.share.batch".equals(type)) {
 			ActivityShareBatchDocument d = new ActivityShareBatchDocument();
 			fillMeta(d, e);
@@ -368,6 +462,10 @@ public class EventConsumerService {
 			SecurityLoginFailedDocument d = (SecurityLoginFailedDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof SecurityDeviceChangedDocument) {
+			SecurityDeviceChangedDocument d = (SecurityDeviceChangedDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivitySessionStartedDocument) {
 			ActivitySessionStartedDocument d = (ActivitySessionStartedDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
@@ -398,6 +496,14 @@ public class EventConsumerService {
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityErrorDocument) {
 			ActivityErrorDocument d = (ActivityErrorDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityDeviceCreatedDocument) {
+			ActivityDeviceCreatedDocument d = (ActivityDeviceCreatedDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityDeviceRenamedDocument) {
+			ActivityDeviceRenamedDocument d = (ActivityDeviceRenamedDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityExtractionStartedDocument) {
@@ -441,6 +547,11 @@ public class EventConsumerService {
 		if (v == null) return null;
 		if (v instanceof Number) return ((Number) v).longValue();
 		try { return Long.parseLong(String.valueOf(v)); } catch (Exception e) { return null; }
+	}
+	private Double d(Object v) {
+		if (v == null) return null;
+		if (v instanceof Number) return ((Number) v).doubleValue();
+		try { return Double.parseDouble(String.valueOf(v)); } catch (Exception e) { return null; }
 	}
 
 	private boolean isCampaignEvent(String type, String suffix) {

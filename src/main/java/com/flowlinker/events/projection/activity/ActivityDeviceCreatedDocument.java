@@ -1,4 +1,4 @@
-package com.flowlinker.events.projection.security;
+package com.flowlinker.events.projection.activity;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -6,8 +6,8 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
 
-@Document(collection = "security_login_success")
-public class SecurityLoginSuccessDocument {
+@Document(collection = "activity_device_created")
+public class ActivityDeviceCreatedDocument {
 
 	@Id
 	private String id;
@@ -21,28 +21,14 @@ public class SecurityLoginSuccessDocument {
 	private String deviceId;
 	private String ip;
 
-	// Novo modelo comum
-	private String source; // web | device
-	private String username;
-	private String role;
-	private String userAgent;
-	private String origin; // somente web
-	private String authTypeHeader; // somente web
-
-	// Campos específicos de device (sucesso)
+	private String source;
 	private String fingerprint;
-	private String appDeviceId; // deviceId vindo do app (payload), para não confundir com deviceId do envelope
-	private String hwHash;
+	private String appDeviceId;
 	private String osName;
 	private String osVersion;
 	private String arch;
 	private String hostname;
 	private String appVersion;
-	private String status;
-
-	// Campos legados ainda presentes para retrocompatibilidade (não mais populados no novo formato)
-	private String platform; // DESKTOP
-	private String account;
 
 	public String getId() { return id; }
 	public void setId(String id) { this.id = id; }
@@ -58,30 +44,12 @@ public class SecurityLoginSuccessDocument {
 	public void setDeviceId(String deviceId) { this.deviceId = deviceId; }
 	public String getIp() { return ip; }
 	public void setIp(String ip) { this.ip = ip; }
-
 	public String getSource() { return source; }
 	public void setSource(String source) { this.source = source; }
-	public String getUsername() { return username; }
-	public void setUsername(String username) { this.username = username; }
-	public String getRole() { return role; }
-	public void setRole(String role) { this.role = role; }
-	public String getUserAgent() { return userAgent; }
-	public void setUserAgent(String userAgent) { this.userAgent = userAgent; }
-	public String getOrigin() { return origin; }
-	public void setOrigin(String origin) { this.origin = origin; }
-	public String getAuthTypeHeader() { return authTypeHeader; }
-	public void setAuthTypeHeader(String authTypeHeader) { this.authTypeHeader = authTypeHeader; }
-
-	public String getPlatform() { return platform; }
-	public void setPlatform(String platform) { this.platform = platform; }
-	public String getAccount() { return account; }
-	public void setAccount(String account) { this.account = account; }
 	public String getFingerprint() { return fingerprint; }
 	public void setFingerprint(String fingerprint) { this.fingerprint = fingerprint; }
 	public String getAppDeviceId() { return appDeviceId; }
 	public void setAppDeviceId(String appDeviceId) { this.appDeviceId = appDeviceId; }
-	public String getHwHash() { return hwHash; }
-	public void setHwHash(String hwHash) { this.hwHash = hwHash; }
 	public String getOsName() { return osName; }
 	public void setOsName(String osName) { this.osName = osName; }
 	public String getOsVersion() { return osVersion; }
@@ -92,8 +60,6 @@ public class SecurityLoginSuccessDocument {
 	public void setHostname(String hostname) { this.hostname = hostname; }
 	public String getAppVersion() { return appVersion; }
 	public void setAppVersion(String appVersion) { this.appVersion = appVersion; }
-	public String getStatus() { return status; }
-	public void setStatus(String status) { this.status = status; }
 }
 
 
