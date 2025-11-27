@@ -7,7 +7,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import java.time.Instant;
 import java.util.Map;
 
-@Document(collection = "activity_account_updated")
+@Document(collection = "activity_social_media_account_updated")
 public class ActivityAccountUpdatedDocument {
 
 	@Id

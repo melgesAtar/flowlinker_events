@@ -587,11 +587,7 @@ public class MetricsService {
 			entry.put("deviceId", deviceId);
 			entry.put("ip", ip);
 			return entry;
-		} else if ("facebook.activity.account_created".equals(type)
-			|| "activity_account_created".equals(type)
-			|| "desktop.activity.account_created".equals(type)
-			|| "desktop.activity.account.created".equals(type)
-			|| "desktop.activity.social_media_account_created".equals(type)) {
+		} else if ("desktop.activity.social_media_account_created".equals(type)) {
 			String actor = account == null || account.isBlank() ? "desconhecido" : account;
 			String effectivePlatform = platform == null || platform.isBlank() ? "DESCONHECIDO" : platform;
 			// novo formato envia "name" em vez de profileName; mantemos compatibilidade
@@ -610,9 +606,7 @@ public class MetricsService {
 			entry.put("deviceId", deviceId);
 			entry.put("ip", ip);
 			return entry;
-		} else if ("facebook.activity.account_updated".equals(type)
-			|| "desktop.activity.account_updated".equals(type)
-			|| "desktop.activity.account.updated".equals(type)) {
+		} else if ("desktop.activity.social_media_account_updated".equals(type) || "web.social.media.account_updated".equals(type)) {
 			String actor = account == null || account.isBlank() ? "desconhecido" : account;
 			String effectivePlatform = platform == null || platform.isBlank() ? "DESCONHECIDO" : platform;
 			String profileName = Optional.ofNullable(s(payload.get("profileName"))).map(String::trim).filter(v -> !v.isEmpty()).orElse(null);
