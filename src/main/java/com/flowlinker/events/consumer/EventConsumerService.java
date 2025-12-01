@@ -294,10 +294,7 @@ public class EventConsumerService {
 			if (profileName == null) profileName = s(p.get("name"));
 			d.setProfileName(profileName);
 			saveIgnoreDup(new SaveOp() { public void run() { activityAccountCreatedRepository.save(d); } });
-		} else if ("facebook.activity.account_updated".equals(type)
-				|| "desktop.activity.account_updated".equals(type)
-				|| "desktop.activity.account.updated".equals(type)
-				|| "desktop.activity.social_media_account_updated".equals(type)) {
+		} else if ("desktop.activity.social_media_account_updated".equals(type) || "web.activity.social.media.account_updated".equals(type)) {
 			ActivityAccountUpdatedDocument d = new ActivityAccountUpdatedDocument();
 			fillMeta(d, e);
 			d.setPlatform(s(p.get("platform")));

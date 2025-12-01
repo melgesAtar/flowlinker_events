@@ -22,7 +22,7 @@ public class ActivityAccountUpdatedDocument {
 	private String deviceId;
 	private String ip;
 
-	private String platform; // FACEBOOK
+	private String platform;
 	private String account;
 	private String profileName;
 	private String accountId;
