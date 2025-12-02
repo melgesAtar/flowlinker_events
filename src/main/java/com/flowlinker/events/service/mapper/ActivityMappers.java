@@ -176,11 +176,17 @@ public final class ActivityMappers {
         Long campaignId = p.asLong("campaignId");
         Integer total = p.asInt("total");
         String campaignName = p.firstNonEmpty("name", "campaignName", "title");
+        String campaignType = p.firstNonEmpty("campaignType", "type", "category");
 
-        String nameLabel = (campaignName != null && !campaignName.isBlank()) ? campaignName + " " : "";
-        String text = total != null
-                ? String.format("Campanha iniciada: %s(%s) - %d itens previstos", nameLabel, platform, total)
-                : String.format("Campanha iniciada: %s(%s)", nameLabel, platform);
+        String nameLabel = (campaignName != null && !campaignName.isBlank()) ? "\"" + campaignName + "\"" : "\"\"";
+        String typeLabel = (campaignType != null && !campaignType.isBlank()) ? "\"" + campaignType + "\"" : "\"\"";
+
+        String text;
+        if (total != null) {
+            text = String.format("Campanha %s iniciada - tipo de campanha: %s - %d itens previstos", nameLabel, typeLabel, total);
+        } else {
+            text = String.format("Campanha %s iniciada - tipo de campanha: %s", nameLabel, typeLabel);
+        }
 
         ActivityEntry entry = ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor, text)
                 .type("campaign.started")
@@ -188,6 +194,7 @@ public final class ActivityMappers {
                 .eventId(ctx.eventId())
                 .platform(platform)
                 .put("campaignName", campaignName)
+                .put("campaignType", campaignType)
                 .deviceId(ctx.deviceId())
                 .ip(ctx.ip());
 
@@ -205,16 +212,14 @@ public final class ActivityMappers {
         Long campaignId = p.asLong("campaignId");
         Long lastIndex = p.asLong("lastProcessedIndex");
         Integer total = p.asInt("total");
-        String campaignName = p.firstNonEmpty("name", "campaignName", "title");
 
-        String nameLabel = (campaignName != null && !campaignName.isBlank()) ? campaignName + " " : "";
         String text;
         if (lastIndex != null && total != null && total > 0) {
-            text = String.format("Campanha em andamento: %s(%s) - %d de %d itens", nameLabel, platform, lastIndex, total);
+            text = String.format("Campanha em andamento (%s) - %d de %d itens", platform, lastIndex, total);
         } else if (lastIndex != null) {
-            text = String.format("Campanha em andamento: %s(%s) - %d itens processados", nameLabel, platform, lastIndex);
+            text = String.format("Campanha em andamento (%s) - %d itens processados", platform, lastIndex);
         } else {
-            text = String.format("Campanha em andamento: %s(%s)", nameLabel, platform);
+            text = String.format("Campanha em andamento (%s)", platform);
         }
 
         ActivityEntry entry = ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor, text)
@@ -222,7 +227,6 @@ public final class ActivityMappers {
                 .eventType(ctx.eventType())
                 .eventId(ctx.eventId())
                 .platform(platform)
-                .put("campaignName", campaignName)
                 .deviceId(ctx.deviceId())
                 .ip(ctx.ip());
 
@@ -243,14 +247,14 @@ public final class ActivityMappers {
         Integer total = p.asInt("total");
         String campaignName = p.firstNonEmpty("name", "campaignName", "title");
 
-        String nameLabel = (campaignName != null && !campaignName.isBlank()) ? campaignName + " " : "";
+        String nameLabel = (campaignName != null && !campaignName.isBlank()) ? "\"" + campaignName + "\" " : "";
         String text;
         if (lastIndex != null && total != null && total > 0) {
-            text = String.format("Campanha concluída: %s(%s) - %d de %d itens", nameLabel, platform, lastIndex, total);
+            text = String.format("Campanha %sconcluída (%s) - %d de %d itens", nameLabel, platform, lastIndex, total);
         } else if (lastIndex != null) {
-            text = String.format("Campanha concluída: %s(%s) - %d itens processados", nameLabel, platform, lastIndex);
+            text = String.format("Campanha %sconcluída (%s) - %d itens processados", nameLabel, platform, lastIndex);
         } else {
-            text = String.format("Campanha concluída: %s(%s)", nameLabel, platform);
+            text = String.format("Campanha %sconcluída (%s)", nameLabel, platform);
         }
 
         ActivityEntry entry = ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor, text)
@@ -280,14 +284,14 @@ public final class ActivityMappers {
         String reason = p.string("reason");
         String campaignName = p.firstNonEmpty("name", "campaignName", "title");
 
-        String nameLabel = (campaignName != null && !campaignName.isBlank()) ? campaignName + " " : "";
+        String nameLabel = (campaignName != null && !campaignName.isBlank()) ? "\"" + campaignName + "\" " : "";
         String text;
         if (lastIndex != null && total != null && total > 0) {
-            text = String.format("Campanha cancelada: %s(%s) - %d de %d itens", nameLabel, platform, lastIndex, total);
+            text = String.format("Campanha %scancelada (%s) - %d de %d itens", nameLabel, platform, lastIndex, total);
         } else if (lastIndex != null) {
-            text = String.format("Campanha cancelada: %s(%s) - %d itens processados", nameLabel, platform, lastIndex);
+            text = String.format("Campanha %scancelada (%s) - %d itens processados", nameLabel, platform, lastIndex);
         } else {
-            text = String.format("Campanha cancelada: %s(%s)", nameLabel, platform);
+            text = String.format("Campanha %scancelada (%s)", nameLabel, platform);
         }
 
         if (reason != null && !reason.isBlank()) {
@@ -311,20 +315,63 @@ public final class ActivityMappers {
         return entry.build();
     }
 
+    public static Map<String, Object> campaignPaused(EventContext ctx) {
+        PayloadExtractor p = ctx.payload();
+        String actor = ctx.resolveActor("sistema");
+        String platform = ctx.resolvePlatform(ctx.inferPlatformFromType());
+
+        Long campaignId = p.asLong("campaignId");
+        Long lastIndex = p.asLong("lastProcessedIndex");
+        Integer total = p.asInt("total");
+        String reason = p.string("reason");
+        String campaignName = p.firstNonEmpty("name", "campaignName", "title");
+
+        String nameLabel = (campaignName != null && !campaignName.isBlank()) ? "\"" + campaignName + "\" " : "";
+        String text;
+        if (lastIndex != null && total != null && total > 0) {
+            text = String.format("Campanha %spausada (%s) - %d de %d itens", nameLabel, platform, lastIndex, total);
+        } else if (lastIndex != null) {
+            text = String.format("Campanha %spausada (%s) - %d itens processados", nameLabel, platform, lastIndex);
+        } else {
+            text = String.format("Campanha %spausada (%s)", nameLabel, platform);
+        }
+
+        if (reason != null && !reason.isBlank()) {
+            text += " - " + reason;
+        }
+
+        ActivityEntry entry = ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor, text)
+                .type("campaign.paused")
+                .eventType(ctx.eventType())
+                .eventId(ctx.eventId())
+                .platform(platform)
+                .put("campaignName", campaignName)
+                .deviceId(ctx.deviceId())
+                .ip(ctx.ip());
+
+        if (campaignId != null) entry.put("campaignId", campaignId);
+        if (lastIndex != null) entry.put("lastProcessedIndex", lastIndex);
+        if (total != null) entry.put("total", total);
+        if (reason != null) entry.put("reason", reason);
+
+        return entry.build();
+    }
+
     // ========== SHARE ==========
 
     public static Map<String, Object> shareBatch(EventContext ctx) {
         PayloadExtractor p = ctx.payload();
         String account = ctx.extractAccount();
-        String actor = (account != null && !account.isBlank()) ? account : "desconhecido";
+        String actor = (account != null && !account.isBlank()) ? account : "";
         String platform = ctx.resolvePlatform("FACEBOOK");
 
         String groupName = p.string("groupName");
-        String text = groupName == null
-                ? String.format("Compartilhamento realizado (%s)", platform)
-                : String.format("Compartilhamento no grupo %s (%s)", groupName, platform);
+        String groupNameLabel = (groupName != null && !groupName.isBlank()) ? "\"" + groupName + "\"" : "\"\"";
+        String accountLabel = (actor != null && !actor.isBlank()) ? "\"" + actor + "\"" : "\"\"";
+        
+        String text = String.format("Compartilhamento no grupo %s pela conta %s", groupNameLabel, accountLabel);
 
-        return ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor, text)
+        return ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor != null && !actor.isBlank() ? actor : "desconhecido", text)
                 .type("share")
                 .eventType(ctx.eventType())
                 .eventId(ctx.eventId())
@@ -387,54 +434,21 @@ public final class ActivityMappers {
 
     public static Map<String, Object> activityError(EventContext ctx) {
         PayloadExtractor p = ctx.payload();
-        String account = ctx.extractAccount();
-        String actor = (account != null && !account.isBlank()) ? account : ctx.resolveActor("sistema");
+        String actor = ctx.resolveActor("sistema");
 
-        // Prioridade: errorMessage > message
-        String errorMessage = p.firstNonEmpty("errorMessage", "message");
-        
-        // Busca o código do erro: code > context.errorType > "desconhecido"
-        String code = p.string("code");
-        if (code == null || code.isBlank()) {
-            Map<String, Object> context = p.asMap("context");
-            if (context != null) {
-                Object errorType = context.get("errorType");
-                if (errorType != null) {
-                    code = String.valueOf(errorType);
-                }
-            }
-        }
-        if (code == null || code.isBlank()) {
-            code = "desconhecido";
-        }
+        String code = p.stringOr("code", "desconhecido");
+        String message = p.string("message");
 
-        String platform = ctx.resolvePlatform(
-                ctx.eventType().startsWith("desktop") ? "DESKTOP" : "FACEBOOK");
-
-        // Monta o texto
-        String text;
-        if (errorMessage != null && !errorMessage.isBlank()) {
-            if (account != null && !account.isBlank()) {
-                text = String.format("Erro reportado: %s (%s) - %s", account, platform, errorMessage);
-            } else {
-                text = String.format("Erro reportado (%s): %s", platform, errorMessage);
-            }
-        } else {
-            if (account != null && !account.isBlank()) {
-                text = String.format("Erro reportado: %s (%s) - %s", account, platform, code);
-            } else {
-                text = String.format("Erro reportado (%s): %s", platform, code);
-            }
-        }
+        String text = message == null
+                ? String.format("Erro reportado (%s)", code)
+                : String.format("Erro reportado (%s): %s", code, message);
 
         ActivityEntry entry = ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor, text)
                 .type("error")
                 .eventType(ctx.eventType())
                 .eventId(ctx.eventId())
-                .platform(platform)
                 .put("code", code)
-                .put("message", errorMessage)
-                .put("account", account)
+                .put("message", message)
                 .deviceId(ctx.deviceId())
                 .ip(ctx.ip());
 

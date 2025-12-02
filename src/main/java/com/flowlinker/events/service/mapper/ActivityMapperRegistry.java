@@ -81,6 +81,10 @@ public final class ActivityMapperRegistry {
                 type -> type.contains(".campaign.") && type.endsWith(".cancelled"),
                 ActivityMappers::campaignCancelled
         );
+        registerPattern(
+                type -> type.contains(".campaign.") && type.endsWith(".paused"),
+                ActivityMappers::campaignPaused
+        );
     }
 
     private ActivityMapperRegistry() {}

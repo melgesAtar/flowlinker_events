@@ -97,18 +97,7 @@ public class MetricsService {
                 .map(event -> EventContext.from(event, zone))
                 .map(ActivityMapperRegistry::map)
                 .filter(Objects::nonNull)
-                .map(this::simplifyActivity)
                 .collect(new LimitedByTypeCollector(limit, 3));
-    }
-
-    private Map<String, Object> simplifyActivity(Map<String, Object> full) {
-        Map<String, Object> simple = new LinkedHashMap<>();
-        simple.put("eventId", full.get("eventId"));
-        simple.put("eventAt", full.get("eventAt"));
-        simple.put("eventAtLocal", full.get("eventAtLocal"));
-        simple.put("type", full.get("type"));
-        simple.put("text", full.get("text"));
-        return simple;
     }
 
     private List<EventDocument> fetchRecentEvents(String customerId, int fetchLimit) {
