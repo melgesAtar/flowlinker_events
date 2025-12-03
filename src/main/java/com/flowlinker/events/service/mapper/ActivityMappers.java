@@ -204,6 +204,46 @@ public final class ActivityMappers {
         return entry.build();
     }
 
+    public static Map<String, Object> campaignResumed(EventContext ctx) {
+        PayloadExtractor p = ctx.payload();
+        String actor = ctx.resolveActor("sistema");
+        String platform = ctx.resolvePlatform(ctx.inferPlatformFromType());
+
+        Long campaignId = p.asLong("campaignId");
+        Integer total = p.asInt("total");
+        String campaignName = p.firstNonEmpty("name", "campaignName", "title");
+        String campaignType = p.firstNonEmpty("campaignType", "type", "category");
+        Long lastIndex = p.asLong("lastProcessedIndex");
+
+        String nameLabel = (campaignName != null && !campaignName.isBlank()) ? "\"" + campaignName + "\"" : "\"\"";
+        String typeLabel = (campaignType != null && !campaignType.isBlank()) ? "\"" + campaignType + "\"" : "\"\"";
+
+        String text;
+        if (lastIndex != null && total != null && total > 0) {
+            text = String.format("Campanha %s retomada - tipo de campanha: %s - %d de %d itens", nameLabel, typeLabel, lastIndex, total);
+        } else if (total != null) {
+            text = String.format("Campanha %s retomada - tipo de campanha: %s - %d itens previstos", nameLabel, typeLabel, total);
+        } else {
+            text = String.format("Campanha %s retomada - tipo de campanha: %s", nameLabel, typeLabel);
+        }
+
+        ActivityEntry entry = ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor, text)
+                .type("campaign.resumed")
+                .eventType(ctx.eventType())
+                .eventId(ctx.eventId())
+                .platform(platform)
+                .put("campaignName", campaignName)
+                .put("campaignType", campaignType)
+                .deviceId(ctx.deviceId())
+                .ip(ctx.ip());
+
+        if (campaignId != null) entry.put("campaignId", campaignId);
+        if (total != null) entry.put("total", total);
+        if (lastIndex != null) entry.put("lastProcessedIndex", lastIndex);
+
+        return entry.build();
+    }
+
     public static Map<String, Object> campaignProgress(EventContext ctx) {
         PayloadExtractor p = ctx.payload();
         String actor = ctx.resolveActor("sistema");
@@ -385,6 +425,45 @@ public final class ActivityMappers {
                 .build();
     }
 
+    public static Map<String, Object> instagramDirectMessageSent(EventContext ctx) {
+        PayloadExtractor p = ctx.payload();
+        String account = ctx.extractAccount();
+        String actor = (account != null && !account.isBlank()) ? account : "desconhecido";
+        String platform = ctx.resolvePlatform("INSTAGRAM");
+        
+        String recipientUsername = p.string("recipientUsername");
+        String recipientId = p.string("recipientId");
+        String messagePreview = p.string("messagePreview");
+        String campaignName = p.string("campaignName");
+        
+        String recipientLabel = (recipientUsername != null && !recipientUsername.isBlank()) 
+                ? "\"@" + recipientUsername + "\"" 
+                : (recipientId != null && !recipientId.isBlank() ? recipientId : "desconhecido");
+        String accountLabel = (actor != null && !actor.isBlank()) ? "\"" + actor + "\"" : "\"\"";
+        
+        String text = String.format("Mensagem direta enviada para %s pela conta %s", recipientLabel, accountLabel);
+        
+        if (campaignName != null && !campaignName.isBlank()) {
+            text += " - Campanha: \"" + campaignName + "\"";
+        }
+
+        ActivityEntry entry = ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor, text)
+                .type("direct_message.sent")
+                .eventType(ctx.eventType())
+                .eventId(ctx.eventId())
+                .platform(platform)
+                .put("account", actor)
+                .put("recipientUsername", recipientUsername)
+                .put("recipientId", recipientId)
+                .put("messagePreview", messagePreview)
+                .put("campaignId", p.asLong("campaignId"))
+                .put("campaignName", campaignName)
+                .deviceId(ctx.deviceId())
+                .ip(ctx.ip());
+
+        return entry.build();
+    }
+
     // ========== SESSION ==========
 
     public static Map<String, Object> sessionStarted(EventContext ctx) {
@@ -503,6 +582,40 @@ public final class ActivityMappers {
         return createExtractionEntry(ctx, "extraction.completed", text, totalGroups, totalMembers);
     }
 
+    public static Map<String, Object> instagramFollowerExtractionStarted(EventContext ctx) {
+        PayloadExtractor p = ctx.payload();
+        String targetUsername = p.string("targetUsername");
+        String accountUsername = p.string("accountUsername");
+        Long followersLimit = p.asLong("followersLimit");
+        Long followersCount = p.asLong("followersCount");
+        String platform = ctx.resolvePlatform("INSTAGRAM");
+
+        String targetLabel = (targetUsername != null && !targetUsername.isBlank()) ? "\"" + targetUsername + "\"" : "\"\"";
+        String accountLabel = (accountUsername != null && !accountUsername.isBlank()) ? "\"" + accountUsername + "\"" : "\"\"";
+
+        String text = String.format("Extração de seguidores iniciada - perfil: %s pela conta: %s", targetLabel, accountLabel);
+        if (followersLimit != null && followersLimit > 0) {
+            text += String.format(" - limite: %d", followersLimit);
+        }
+        if (followersCount != null && followersCount > 0) {
+            text += String.format(" - extraídos: %d", followersCount);
+        }
+
+        return ActivityEntry.create(ctx.eventAt(), ctx.zone(), accountUsername != null ? accountUsername : "sistema", text)
+                .type("extraction.instagram_followers.started")
+                .eventType(ctx.eventType())
+                .eventId(ctx.eventId())
+                .platform(platform)
+                .put("targetUsername", targetUsername)
+                .put("accountUsername", accountUsername)
+                .put("extractionId", p.asLong("extractionId"))
+                .put("followersLimit", followersLimit)
+                .put("followersCount", followersCount)
+                .deviceId(ctx.deviceId())
+                .ip(ctx.ip())
+                .build();
+    }
+
     // ========== ACCOUNT ==========
 
     public static Map<String, Object> accountCreated(EventContext ctx) {
@@ -561,12 +674,32 @@ public final class ActivityMappers {
 
     public static Map<String, Object> accountSuspended(EventContext ctx) {
         PayloadExtractor p = ctx.payload();
-        String account = ctx.extractAccount();
+        
+        // Extrai account diretamente do payload usando múltiplas chaves
+        String account = p.firstNonEmpty("account", "username", "name");
         String actor = (account != null && !account.isBlank()) ? account : "desconhecido";
-        String platform = ctx.resolvePlatform("DESKTOP");
-        String reason = p.stringOr("reason", "motivo não informado");
-
-        String text = String.format("Conta suspensa: %s (%s) - %s", actor, platform, reason);
+        
+        // Extrai platform do payload, com fallback inteligente
+        String platform = p.firstNonEmpty("platform", "source");
+        if (platform == null || platform.isBlank()) {
+            // Tenta inferir do tipo do evento
+            if (ctx.eventType() != null && ctx.eventType().contains("social_media")) {
+                platform = "FACEBOOK"; // fallback padrão para redes sociais
+            } else {
+                platform = "DESKTOP";
+            }
+        }
+        platform = platform.toUpperCase();
+        
+        String reason = p.string("reason");
+        
+        // Formata o texto
+        String text;
+        if (reason != null && !reason.isBlank() && !reason.isEmpty()) {
+            text = String.format("Conta suspensa: \"%s\" (%s) - %s", actor, platform, reason);
+        } else {
+            text = String.format("Conta suspensa: \"%s\" (%s)", actor, platform);
+        }
 
         return ActivityEntry.create(ctx.eventAt(), ctx.zone(), actor, text)
                 .type("account.suspended")

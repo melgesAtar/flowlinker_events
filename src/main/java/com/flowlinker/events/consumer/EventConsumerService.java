@@ -53,6 +53,7 @@ public class EventConsumerService {
 	private final ActivityAccountCreatedRepository activityAccountCreatedRepository;
 	private final ActivityAccountUpdatedRepository activityAccountUpdatedRepository;
 	private final ActivityAccountSuspendedRepository activityAccountSuspendedRepository;
+	private final ActivitySocialMediaAccountSuspendedRepository activitySocialMediaAccountSuspendedRepository;
 	private final ActivityAccountBlockedRepository activityAccountBlockedRepository;
 	private final ActivityShareBatchRepository activityShareBatchRepository;
 	private final ActivityErrorRepository activityErrorRepository;
@@ -60,6 +61,8 @@ public class EventConsumerService {
 	private final ActivityExtractionPausedRepository activityExtractionPausedRepository;
 	private final ActivityExtractionCancelledRepository activityExtractionCancelledRepository;
 	private final ActivityExtractionCompletedRepository activityExtractionCompletedRepository;
+	private final ActivityInstagramFollowerExtractionStartedRepository activityInstagramFollowerExtractionStartedRepository;
+	private final ActivityInstagramDirectMessageSentRepository activityInstagramDirectMessageSentRepository;
 	private final ActivityDeviceCreatedRepository activityDeviceCreatedRepository;
 	private final ActivityDeviceRenamedRepository activityDeviceRenamedRepository;
 	private final CampaignStartedRepository campaignStartedRepository;
@@ -83,6 +86,7 @@ public class EventConsumerService {
 		ActivityAccountCreatedRepository activityAccountCreatedRepository,
 		ActivityAccountUpdatedRepository activityAccountUpdatedRepository,
 		ActivityAccountSuspendedRepository activityAccountSuspendedRepository,
+		ActivitySocialMediaAccountSuspendedRepository activitySocialMediaAccountSuspendedRepository,
 		ActivityAccountBlockedRepository activityAccountBlockedRepository,
 		ActivityShareBatchRepository activityShareBatchRepository,
 		ActivityErrorRepository activityErrorRepository,
@@ -90,6 +94,8 @@ public class EventConsumerService {
 		ActivityExtractionPausedRepository activityExtractionPausedRepository,
 		ActivityExtractionCancelledRepository activityExtractionCancelledRepository,
 		ActivityExtractionCompletedRepository activityExtractionCompletedRepository,
+		ActivityInstagramFollowerExtractionStartedRepository activityInstagramFollowerExtractionStartedRepository,
+		ActivityInstagramDirectMessageSentRepository activityInstagramDirectMessageSentRepository,
 		ActivityDeviceCreatedRepository activityDeviceCreatedRepository,
 		ActivityDeviceRenamedRepository activityDeviceRenamedRepository,
 		CampaignStartedRepository campaignStartedRepository,
@@ -105,6 +111,7 @@ public class EventConsumerService {
 		this.activityAccountCreatedRepository = activityAccountCreatedRepository;
 		this.activityAccountUpdatedRepository = activityAccountUpdatedRepository;
 		this.activityAccountSuspendedRepository = activityAccountSuspendedRepository;
+		this.activitySocialMediaAccountSuspendedRepository = activitySocialMediaAccountSuspendedRepository;
 		this.activityAccountBlockedRepository = activityAccountBlockedRepository;
 		this.activityShareBatchRepository = activityShareBatchRepository;
 		this.activityErrorRepository = activityErrorRepository;
@@ -112,6 +119,8 @@ public class EventConsumerService {
 		this.activityExtractionPausedRepository = activityExtractionPausedRepository;
 		this.activityExtractionCancelledRepository = activityExtractionCancelledRepository;
 		this.activityExtractionCompletedRepository = activityExtractionCompletedRepository;
+		this.activityInstagramFollowerExtractionStartedRepository = activityInstagramFollowerExtractionStartedRepository;
+		this.activityInstagramDirectMessageSentRepository = activityInstagramDirectMessageSentRepository;
 		this.activityDeviceCreatedRepository = activityDeviceCreatedRepository;
 		this.activityDeviceRenamedRepository = activityDeviceRenamedRepository;
 		this.campaignStartedRepository = campaignStartedRepository;
@@ -183,6 +192,7 @@ public class EventConsumerService {
 
 	private void projectTyped(EnrichedEventDTO e) {
 		String type = e.getEventType();
+		log.debug("projectTyped chamado para eventType={}, eventId={}", type, e.getEventId());
 		Map<String, Object> p = e.getPayload();
 		if (p == null) {
 			p = Collections.emptyMap();
@@ -311,6 +321,22 @@ public class EventConsumerService {
 				d.setChanges(null);
 			}
 			saveIgnoreDup(new SaveOp() { public void run() { activityAccountUpdatedRepository.save(d); } });
+		} else if ("desktop.activity.social_media_account_suspended".equals(type)
+				|| "web.activity.social_media_account_suspended".equals(type)) {
+			log.info("PROCESSANDO evento de suspensão de conta de rede social: eventId={}, type={}", e.getEventId(), type);
+			ActivitySocialMediaAccountSuspendedDocument d = new ActivitySocialMediaAccountSuspendedDocument();
+			fillMeta(d, e);
+			d.setPlatform(s(p.get("platform")));
+			d.setAccount(s(p.get("account")));
+			d.setReason(s(p.get("reason")));
+			log.info("Dados do documento antes de salvar: platform={}, account={}, reason={}, eventId={}", 
+					d.getPlatform(), d.getAccount(), d.getReason(), d.getEventId());
+			saveIgnoreDup(new SaveOp() { 
+				public void run() { 
+					activitySocialMediaAccountSuspendedRepository.save(d);
+					log.info("Evento de suspensão SALVO com sucesso na collection activity_social_media_account_suspended: eventId={}", d.getEventId());
+				} 
+			});
 		} else if ("desktop.activity.account_suspended".equals(type)) {
 			ActivityAccountSuspendedDocument d = new ActivityAccountSuspendedDocument();
 			fillMeta(d, e);
@@ -367,6 +393,17 @@ public class EventConsumerService {
 			d.setTotalGroups(l(p.get("totalGroups")));
 			d.setTotalMembers(l(p.get("totalMembers")));
 			saveIgnoreDup(new SaveOp() { public void run() { activityExtractionCompletedRepository.save(d); } });
+		} else if ("desktop.activity.instagram_follower_extraction_started".equals(type)
+				|| "web.activity.instagram_follower_extraction_started".equals(type)) {
+			ActivityInstagramFollowerExtractionStartedDocument d = new ActivityInstagramFollowerExtractionStartedDocument();
+			fillMeta(d, e);
+			d.setExtractionId(l(p.get("extractionId")));
+			d.setTargetUsername(s(p.get("targetUsername")));
+			d.setFollowersLimit(l(p.get("followersLimit")));
+			d.setFollowersCount(l(p.get("followersCount")));
+			d.setAccountUsername(s(p.get("accountUsername")));
+			d.setAccountPlatform(s(p.get("accountPlatform")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityInstagramFollowerExtractionStartedRepository.save(d); } });
 		} else if ("device.activity.created".equals(type)) {
 			ActivityDeviceCreatedDocument d = new ActivityDeviceCreatedDocument();
 			fillMeta(d, e);
@@ -399,6 +436,21 @@ public class EventConsumerService {
 			d.setGroupMembers(s(p.get("groupMembers")));
 			d.setPost(s(p.get("post")));
 			saveIgnoreDup(new SaveOp() { public void run() { activityShareBatchRepository.save(d); } });
+		} else if ("instagram.activity.direct_message.sent".equals(type) 
+				|| "instagram.direct_message.sent".equals(type)
+				|| "desktop.activity.direct_message.sent".equals(type)
+				|| "desktop.activity.direct.message.sent".equals(type)) {
+			ActivityInstagramDirectMessageSentDocument d = new ActivityInstagramDirectMessageSentDocument();
+			fillMeta(d, e);
+			d.setPlatform("INSTAGRAM");
+			d.setAccount(s(p.get("account")));
+			d.setRecipientUsername(s(p.get("recipientUsername")));
+			d.setRecipientId(s(p.get("recipientId")));
+			d.setMessagePreview(s(p.get("messagePreview")));
+			d.setCampaignId(l(p.get("campaignId")));
+			d.setCampaignName(s(p.get("campaignName")));
+			d.setSource(s(p.get("source")));
+			saveIgnoreDup(new SaveOp() { public void run() { activityInstagramDirectMessageSentRepository.save(d); } });
 		} else if ("facebook.activity.error".equals(type) || "desktop.activity.error".equals(type)) {
 			ActivityErrorDocument d = new ActivityErrorDocument();
 			fillMeta(d, e);
@@ -417,19 +469,34 @@ public class EventConsumerService {
 			CampaignStartedDocument d = new CampaignStartedDocument();
 			fillMeta(d, e);
 			CampaignDescriptor descriptor = describeCampaign(type, p);
-			d.setPlatform(descriptor.platform);
-			d.setCampaignType(descriptor.category);
+			d.setPlatform(descriptor.platform != null ? descriptor.platform.toUpperCase() : "INSTAGRAM");
+			// Usa campaignType do payload se disponível, senão usa do descriptor
+			String campaignType = s(p.get("campaignType"));
+			if (campaignType == null || campaignType.isBlank()) {
+				campaignType = descriptor.category;
+			}
+			d.setCampaignType(campaignType);
 			d.setEventType(type);
 			d.setCampaignId(l(p.get("campaignId")));
-			d.setExtractionId(l(p.get("extractionId")));
+			// Mapeia followerExtractionId para extractionId quando necessário
+			Long extractionId = l(p.get("extractionId"));
+			if (extractionId == null) {
+				extractionId = l(p.get("followerExtractionId"));
+			}
+			d.setExtractionId(extractionId);
 			d.setTotal(i(p.get("total")));
 			saveIgnoreDup(new SaveOp() { public void run() { campaignStartedRepository.save(d); } });
 		} else if (isCampaignEvent(type, "progress")) {
 			CampaignProgressDocument d = new CampaignProgressDocument();
 			fillMeta(d, e);
 			CampaignDescriptor descriptor = describeCampaign(type, p);
-			d.setPlatform(descriptor.platform);
-			d.setCampaignType(descriptor.category);
+			d.setPlatform(descriptor.platform != null ? descriptor.platform.toUpperCase() : "INSTAGRAM");
+			// Usa campaignType do payload se disponível, senão usa do descriptor
+			String campaignType = s(p.get("campaignType"));
+			if (campaignType == null || campaignType.isBlank()) {
+				campaignType = descriptor.category;
+			}
+			d.setCampaignType(campaignType);
 			d.setEventType(type);
 			d.setCampaignId(l(p.get("campaignId")));
 			d.setLastProcessedIndex(i(p.get("lastProcessedIndex")));
@@ -439,8 +506,13 @@ public class EventConsumerService {
 			CampaignCompletedDocument d = new CampaignCompletedDocument();
 			fillMeta(d, e);
 			CampaignDescriptor descriptor = describeCampaign(type, p);
-			d.setPlatform(descriptor.platform);
-			d.setCampaignType(descriptor.category);
+			d.setPlatform(descriptor.platform != null ? descriptor.platform.toUpperCase() : "INSTAGRAM");
+			// Usa campaignType do payload se disponível, senão usa do descriptor
+			String campaignType = s(p.get("campaignType"));
+			if (campaignType == null || campaignType.isBlank()) {
+				campaignType = descriptor.category;
+			}
+			d.setCampaignType(campaignType);
 			d.setEventType(type);
 			d.setCampaignId(l(p.get("campaignId")));
 			d.setLastProcessedIndex(i(p.get("lastProcessedIndex")));
@@ -453,8 +525,14 @@ public class EventConsumerService {
 
 	private interface SaveOp { void run(); }
 	private void saveIgnoreDup(SaveOp op) {
-		try { op.run(); }
-		catch (DuplicateKeyException dup) { /* ok - idempotente */ }
+		try { 
+			op.run(); 
+		} catch (DuplicateKeyException dup) { 
+			log.debug("Evento duplicado ignorado: {}", dup.getMessage());
+		} catch (Exception ex) {
+			log.error("Erro ao salvar documento: {}", ex.getMessage(), ex);
+			throw ex; // Re-lança para ser capturado pelo try-catch do projectTyped
+		}
 	}
 
 	private void fillMeta(Object target, EnrichedEventDTO e) {
@@ -485,6 +563,10 @@ public class EventConsumerService {
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityAccountUpdatedDocument) {
 			ActivityAccountUpdatedDocument d = (ActivityAccountUpdatedDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivitySocialMediaAccountSuspendedDocument) {
+			ActivitySocialMediaAccountSuspendedDocument d = (ActivitySocialMediaAccountSuspendedDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityAccountSuspendedDocument) {
@@ -525,6 +607,14 @@ public class EventConsumerService {
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityExtractionCompletedDocument) {
 			ActivityExtractionCompletedDocument d = (ActivityExtractionCompletedDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityInstagramFollowerExtractionStartedDocument) {
+			ActivityInstagramFollowerExtractionStartedDocument d = (ActivityInstagramFollowerExtractionStartedDocument) target;
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityInstagramDirectMessageSentDocument) {
+			ActivityInstagramDirectMessageSentDocument d = (ActivityInstagramDirectMessageSentDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof CampaignStartedDocument) {
@@ -571,26 +661,30 @@ public class EventConsumerService {
 		if (platform == null) {
 			platform = s(payload.get("source"));
 		}
-		String category = null;
-		if (type != null) {
-			String[] parts = type.split("\\.");
-			int campaignIndex = -1;
-			for (int i = 0; i < parts.length; i++) {
-				if ("campaign".equals(parts[i])) {
-					campaignIndex = i;
-					break;
+		// Tenta usar campaignType do payload primeiro
+		String category = s(payload.get("campaignType"));
+		if (category == null || category.isBlank()) {
+			category = null;
+			if (type != null) {
+				String[] parts = type.split("\\.");
+				int campaignIndex = -1;
+				for (int i = 0; i < parts.length; i++) {
+					if ("campaign".equals(parts[i])) {
+						campaignIndex = i;
+						break;
+					}
 				}
-			}
-			if (campaignIndex >= 0) {
-				if (platform == null && campaignIndex > 0) {
-					platform = parts[0];
-				}
-				int variantStart = campaignIndex + 1;
-				int variantEnd = parts.length - 1;
-				if (variantStart < variantEnd) {
-					category = String.join(".", Arrays.copyOfRange(parts, variantStart, variantEnd));
-					if (category != null && category.isBlank()) {
-						category = null;
+				if (campaignIndex >= 0) {
+					if (platform == null && campaignIndex > 0) {
+						platform = parts[0];
+					}
+					int variantStart = campaignIndex + 1;
+					int variantEnd = parts.length - 1;
+					if (variantStart < variantEnd) {
+						category = String.join(".", Arrays.copyOfRange(parts, variantStart, variantEnd));
+						if (category != null && category.isBlank()) {
+							category = null;
+						}
 					}
 				}
 			}

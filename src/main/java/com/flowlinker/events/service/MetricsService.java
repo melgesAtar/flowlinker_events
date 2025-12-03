@@ -25,20 +25,20 @@ import java.util.stream.Collectors;
 @Service
 public class MetricsService {
 
-    private static final Logger log = LoggerFactory.getLogger(MetricsService.class);
+	private static final Logger log = LoggerFactory.getLogger(MetricsService.class);
     private static final Pattern CAMPAIGN_STARTED_PATTERN = Pattern.compile(
             "\\.campaign(\\.[^.]+)*\\.started$", Pattern.CASE_INSENSITIVE);
 
-    private final MongoTemplate mongoTemplate;
+	private final MongoTemplate mongoTemplate;
 
-    public MetricsService(MongoTemplate mongoTemplate) {
-        this.mongoTemplate = mongoTemplate;
-    }
+	public MetricsService(MongoTemplate mongoTemplate) {
+		this.mongoTemplate = mongoTemplate;
+	}
 
     // ==================== OVERVIEW ====================
 
-    public Map<String, Object> overview(DurationRange range, String customerId) {
-        long actions = countShareBatch(customerId, range);
+	public Map<String, Object> overview(DurationRange range, String customerId) {
+        long actions = countAllActions(customerId, range);
         long errors = countActivityErrors(customerId, range);
         double errorRate = calculateErrorRate(actions, errors);
 
@@ -48,10 +48,10 @@ public class MetricsService {
                 "activePersonas", countActivePersonas(customerId, range),
                 "errorRate", errorRate
         );
-    }
+	}
 
-    public Map<String, Object> errorSummary(DurationRange range, String customerId) {
-        long actions = countShareBatch(customerId, range);
+	public Map<String, Object> errorSummary(DurationRange range, String customerId) {
+        long actions = countAllActions(customerId, range);
         long errors = countActivityErrors(customerId, range);
 
         return Map.of(
@@ -59,28 +59,34 @@ public class MetricsService {
                 "referenceActions", actions,
                 "errorRate", calculateErrorRate(actions, errors)
         );
-    }
+	}
 
-    public Map<String, Long> actionsSummary(DurationRange range, String customerId) {
+	public Map<String, Long> actionsSummary(DurationRange range, String customerId) {
         long shares = safeCount(() -> countShareBatch(customerId, range), "shares");
+        long directMessages = safeCount(() -> countDirectMessages(customerId, range), "direct_messages");
         long extractions = campaignsCount(range, customerId);
 
         return new LinkedHashMap<>(Map.of(
                 "shares", shares,
+                "directMessages", directMessages,
                 "extractions", extractions,
                 "instagramLikes", 0L,
                 "instagramComments", 0L,
-                "total", shares + extractions
+                "total", shares + directMessages + extractions
         ));
     }
 
     // ==================== COUNTS ====================
 
-    public long sharesCount(DurationRange range, String customerId) {
+	public long sharesCount(DurationRange range, String customerId) {
         return countShareBatch(customerId, range);
     }
 
-    public long campaignsCount(DurationRange range, String customerId) {
+    public long directMessagesCount(DurationRange range, String customerId) {
+        return countDirectMessages(customerId, range);
+	}
+
+	public long campaignsCount(DurationRange range, String customerId) {
         Query query = timeRangeQuery(customerId, range)
                 .addCriteria(Criteria.where("eventType").regex(CAMPAIGN_STARTED_PATTERN));
 
@@ -89,8 +95,8 @@ public class MetricsService {
 
     // ==================== RECENT ACTIVITIES ====================
 
-    public List<Map<String, Object>> recentActivities(String customerId, int limit, String zoneId) {
-        ZoneId zone = safeZone(zoneId);
+	public List<Map<String, Object>> recentActivities(String customerId, int limit, String zoneId) {
+		ZoneId zone = safeZone(zoneId);
         List<EventDocument> events = fetchRecentEvents(customerId, limit * 4);
 
         return events.stream()
@@ -101,13 +107,13 @@ public class MetricsService {
     }
 
     private List<EventDocument> fetchRecentEvents(String customerId, int fetchLimit) {
-        try {
-            Query query = Query.query(Criteria.where("customerId").is(customerId))
+		try {
+			Query query = Query.query(Criteria.where("customerId").is(customerId))
                     .with(Sort.by(Sort.Direction.DESC, "eventAt"))
                     .limit(Math.max(fetchLimit, 1));
             return mongoTemplate.find(query, EventDocument.class);
-        } catch (DataAccessException e) {
-            log.warn("Falha ao consultar eventos brutos", e);
+		} catch (DataAccessException e) {
+			log.warn("Falha ao consultar eventos brutos", e);
             return Collections.emptyList();
         }
     }
@@ -193,11 +199,11 @@ public class MetricsService {
             default -> "Extração - " + type;
         };
 
-        Map<String, Object> m = new LinkedHashMap<>();
+				Map<String, Object> m = new LinkedHashMap<>();
         m.put("type", type);
         m.put("eventAt", eventAt);
         m.put("eventAtLocal", eventAt.atZone(zone).toString());
-        m.put("zone", zone.getId());
+				m.put("zone", zone.getId());
         m.put("text", text);
         m.put("totalGroups", groups);
         m.put("totalMembers", members);
@@ -207,23 +213,80 @@ public class MetricsService {
     // ==================== ANALYTICS ====================
 
     public Map<String, Long> distributionByNetwork(DurationRange range, String customerId) {
-        List<ActivityShareBatchDocument> docs = mongoTemplate.find(
+        Map<String, Long> distribution = new LinkedHashMap<>();
+        Set<String> processedEventIds = new HashSet<>();
+        
+        // Shares (Facebook) - da collection específica
+        List<ActivityShareBatchDocument> shareDocs = mongoTemplate.find(
                 timeRangeQuery(customerId, range), ActivityShareBatchDocument.class);
+        shareDocs.forEach(d -> {
+            if (d.getEventId() != null) processedEventIds.add(d.getEventId());
+            String platform = Optional.ofNullable(d.getPlatform()).orElse("FACEBOOK");
+            distribution.merge(platform, 1L, Long::sum);
+        });
+        
+        // Direct Messages (Instagram) - da collection específica
+        List<ActivityInstagramDirectMessageSentDocument> messageDocs = mongoTemplate.find(
+                timeRangeQuery(customerId, range), ActivityInstagramDirectMessageSentDocument.class);
+        messageDocs.forEach(d -> {
+            if (d.getEventId() != null) processedEventIds.add(d.getEventId());
+            String platform = Optional.ofNullable(d.getPlatform()).orElse("INSTAGRAM");
+            distribution.merge(platform, 1L, Long::sum);
+        });
+        
+        // Fallback: eventos brutos apenas para eventos que não estão nas collections específicas
+        try {
+            Query query = Query.query(Criteria.where("customerId").is(customerId)
+                    .and("eventAt").gte(range.from()).lte(range.to())
+                    .and("eventType").in("facebook.activity.share_batch", "facebook.activity.share.batch",
+                            "instagram.activity.direct_message.sent", "instagram.direct_message.sent",
+                            "desktop.activity.direct_message.sent", "desktop.activity.direct.message.sent"));
 
-        return docs.stream().collect(Collectors.groupingBy(
-                d -> Optional.ofNullable(d.getPlatform()).orElse("DESCONHECIDO"),
-                Collectors.counting()
-        ));
-    }
+            for (EventDocument ev : mongoTemplate.find(query, EventDocument.class)) {
+                // Ignora se já foi processado da collection específica
+                if (ev.getEventId() != null && processedEventIds.contains(ev.getEventId())) {
+                    continue;
+                }
+                
+                Map<String, Object> p = ev.getPayload();
+                if (p == null) continue;
+                
+                String eventType = ev.getEventType();
+                String platform = null;
+                
+                // Determina a plataforma baseado no tipo do evento e payload
+                if (eventType != null && (eventType.contains("share_batch") || eventType.contains("share.batch"))) {
+                    platform = Optional.ofNullable(asString(p.get("platform"))).orElse("FACEBOOK");
+                } else if (eventType != null && (eventType.contains("direct_message") || eventType.contains("direct.message"))) {
+                    platform = Optional.ofNullable(asString(p.get("platform"))).orElse("INSTAGRAM");
+                }
+                
+                if (platform != null) {
+                    distribution.merge(platform, 1L, Long::sum);
+                }
+			}
+		} catch (DataAccessException e) {
+            log.warn("Falha ao consultar eventos brutos para distributionByNetwork", e);
+        }
+        
+        return distribution;
+	}
 
-    public List<Map<String, Object>> dailyActions(String customerId, int days) {
-        ZonedDateTime now = ZonedDateTime.now(ZoneId.systemDefault()).withNano(0);
-        ZonedDateTime start = now.minusDays(days - 1).withHour(0).withMinute(0).withSecond(0);
+	public List<Map<String, Object>> dailyActions(String customerId, int days) {
+		ZonedDateTime now = ZonedDateTime.now(ZoneId.systemDefault()).withNano(0);
+		ZonedDateTime start = now.minusDays(days - 1).withHour(0).withMinute(0).withSecond(0);
 
         Query query = Query.query(Criteria.where("customerId").is(customerId)
-                .and("eventAt").gte(start.toInstant()).lte(now.toInstant()));
+			.and("eventAt").gte(start.toInstant()).lte(now.toInstant()));
 
         Map<String, Long> sharesPerDay = mongoTemplate.find(query, ActivityShareBatchDocument.class).stream()
+                .collect(Collectors.groupingBy(
+                        d -> d.getEventAt().atZone(now.getZone()).toLocalDate().toString(),
+			TreeMap::new,
+			Collectors.counting()
+		));
+
+        Map<String, Long> messagesPerDay = mongoTemplate.find(query, ActivityInstagramDirectMessageSentDocument.class).stream()
                 .collect(Collectors.groupingBy(
                         d -> d.getEventAt().atZone(now.getZone()).toLocalDate().toString(),
                         TreeMap::new,
@@ -231,53 +294,76 @@ public class MetricsService {
                 ));
 
         List<Map<String, Object>> result = new ArrayList<>();
-        for (int i = 0; i < days; i++) {
+		for (int i = 0; i < days; i++) {
             String key = start.plusDays(i).format(DateTimeFormatter.ISO_LOCAL_DATE);
+            long shares = sharesPerDay.getOrDefault(key, 0L);
+            long messages = messagesPerDay.getOrDefault(key, 0L);
             result.add(Map.of(
                     "date", key,
                     "likes", 0,
                     "comments", 0,
-                    "shares", sharesPerDay.getOrDefault(key, 0L)
+                    "shares", shares,
+                    "directMessages", messages,
+                    "total", shares + messages
             ));
         }
         return result;
-    }
+	}
 
-    public List<Map<String, Object>> heatmap(String customerId, int days) {
-        ZonedDateTime now = ZonedDateTime.now(ZoneId.systemDefault()).withNano(0);
-        ZonedDateTime start = now.minusDays(days - 1).withHour(0).withMinute(0).withSecond(0);
+	public List<Map<String, Object>> heatmap(String customerId, int days) {
+		ZonedDateTime now = ZonedDateTime.now(ZoneId.systemDefault()).withNano(0);
+		ZonedDateTime start = now.minusDays(days - 1).withHour(0).withMinute(0).withSecond(0);
 
         Query query = Query.query(Criteria.where("customerId").is(customerId)
-                .and("eventAt").gte(start.toInstant()).lte(now.toInstant()));
+			.and("eventAt").gte(start.toInstant()).lte(now.toInstant()));
 
-        int[][] matrix = new int[7][24];
+		int[][] matrix = new int[7][24];
+        
+        // Shares (Facebook)
         for (ActivityShareBatchDocument d : mongoTemplate.find(query, ActivityShareBatchDocument.class)) {
+			ZonedDateTime z = d.getEventAt().atZone(now.getZone());
+			int dow = z.getDayOfWeek().getValue() % 7;
+            matrix[dow][z.getHour()]++;
+        }
+        
+        // Direct Messages (Instagram)
+        for (ActivityInstagramDirectMessageSentDocument d : mongoTemplate.find(query, ActivityInstagramDirectMessageSentDocument.class)) {
             ZonedDateTime z = d.getEventAt().atZone(now.getZone());
             int dow = z.getDayOfWeek().getValue() % 7;
             matrix[dow][z.getHour()]++;
         }
 
         List<Map<String, Object>> result = new ArrayList<>();
-        for (int dow = 0; dow < 7; dow++) {
-            for (int h = 0; h < 24; h++) {
+		for (int dow = 0; dow < 7; dow++) {
+			for (int h = 0; h < 24; h++) {
                 result.add(Map.of("dayOfWeek", dow, "hour", h, "count", matrix[dow][h]));
             }
         }
         return result;
-    }
+	}
 
-    public List<Map<String, Object>> rankingPersonas(DurationRange range, String customerId, int limit) {
-        List<ActivityShareBatchDocument> docs = mongoTemplate.find(
+	public List<Map<String, Object>> rankingPersonas(DurationRange range, String customerId, int limit) {
+        Map<String, Long> actionsByAccount = new HashMap<>();
+        
+        // Shares (Facebook)
+        List<ActivityShareBatchDocument> shareDocs = mongoTemplate.find(
                 timeRangeQuery(customerId, range), ActivityShareBatchDocument.class);
+        shareDocs.forEach(d -> {
+            String account = Optional.ofNullable(d.getAccount()).orElse("desconhecido");
+            actionsByAccount.merge(account, 1L, Long::sum);
+        });
+        
+        // Direct Messages (Instagram)
+        List<ActivityInstagramDirectMessageSentDocument> messageDocs = mongoTemplate.find(
+                timeRangeQuery(customerId, range), ActivityInstagramDirectMessageSentDocument.class);
+        messageDocs.forEach(d -> {
+            String account = Optional.ofNullable(d.getAccount()).orElse("desconhecido");
+            actionsByAccount.merge(account, 1L, Long::sum);
+        });
 
-        return docs.stream()
-                .collect(Collectors.groupingBy(
-                        d -> Optional.ofNullable(d.getAccount()).orElse("desconhecido"),
-                        Collectors.counting()
-                ))
-                .entrySet().stream()
-                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
-                .limit(limit)
+        return actionsByAccount.entrySet().stream()
+			.sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+			.limit(limit)
                 .map(e -> Map.<String, Object>of("account", e.getKey(), "actions", e.getValue()))
                 .toList();
     }
@@ -297,16 +383,16 @@ public class MetricsService {
                     membersByGroup.putIfAbsent(key, parseLongSafe(d.getGroupMembers()));
                 }
             }
-        } catch (DataAccessException e) {
-            log.warn("Falha ao calcular peopleReached (projeção)", e);
-        }
+		} catch (DataAccessException e) {
+			log.warn("Falha ao calcular peopleReached (projeção)", e);
+		}
 
         // Fallback: eventos brutos
-        try {
+		try {
             Query query = Query.query(Criteria.where("customerId").is(customerId)
                     .and("eventAt").gte(range.from()).lte(range.to())
-                    .and("eventType").in("facebook.activity.share_batch", "facebook.activity.share.batch"))
-                    .with(Sort.by(Sort.Direction.DESC, "eventAt"));
+				.and("eventType").in("facebook.activity.share_batch", "facebook.activity.share.batch"))
+				.with(Sort.by(Sort.Direction.DESC, "eventAt"));
 
             for (EventDocument ev : mongoTemplate.find(query, EventDocument.class)) {
                 Map<String, Object> p = ev.getPayload();
@@ -322,9 +408,9 @@ public class MetricsService {
                     membersByGroup.putIfAbsent(key, members);
                 }
             }
-        } catch (DataAccessException e) {
-            log.warn("Falha ao calcular peopleReached (bruto)", e);
-        }
+		} catch (DataAccessException e) {
+			log.warn("Falha ao calcular peopleReached (bruto)", e);
+		}
 
         return membersByGroup.values().stream()
                 .mapToLong(members -> Math.round(members * 0.30d))
@@ -341,6 +427,8 @@ public class MetricsService {
         return findLatest(customerId, account, ActivitySessionStartedDocument.class)
                 .map(doc -> usageInfo(doc.getEventAt(), doc.getReceivedAt(), zone))
                 .or(() -> findLatest(customerId, account, ActivityShareBatchDocument.class)
+                        .map(doc -> usageInfo(doc.getEventAt(), doc.getReceivedAt(), zone)))
+                .or(() -> findLatest(customerId, account, ActivityInstagramDirectMessageSentDocument.class)
                         .map(doc -> usageInfo(doc.getEventAt(), doc.getReceivedAt(), zone)));
     }
 
@@ -368,6 +456,14 @@ public class MetricsService {
         return safeCount(() -> mongoTemplate.count(timeRangeQuery(customerId, range), ActivityShareBatchDocument.class), "shares");
     }
 
+    private long countDirectMessages(String customerId, DurationRange range) {
+        return safeCount(() -> mongoTemplate.count(timeRangeQuery(customerId, range), ActivityInstagramDirectMessageSentDocument.class), "direct_messages");
+    }
+
+    private long countAllActions(String customerId, DurationRange range) {
+        return countShareBatch(customerId, range) + countDirectMessages(customerId, range);
+    }
+
     private long countActivityErrors(String customerId, DurationRange range) {
         return safeCount(() -> mongoTemplate.count(timeRangeQuery(customerId, range), ActivityErrorDocument.class), "errors");
     }
@@ -379,6 +475,8 @@ public class MetricsService {
         mongoTemplate.find(query, ActivitySessionStartedDocument.class)
                 .forEach(s -> { if (s.getAccount() != null) accounts.add(s.getAccount()); });
         mongoTemplate.find(query, ActivityShareBatchDocument.class)
+                .forEach(s -> { if (s.getAccount() != null) accounts.add(s.getAccount()); });
+        mongoTemplate.find(query, ActivityInstagramDirectMessageSentDocument.class)
                 .forEach(s -> { if (s.getAccount() != null) accounts.add(s.getAccount()); });
 
         return accounts.size();
@@ -440,15 +538,15 @@ public class MetricsService {
             log.warn("Falha ao contar {}", label, e);
             return 0;
         }
-    }
+	}
 
-    private ZoneId safeZone(String zoneId) {
-        try {
-            return ZoneId.of(zoneId);
-        } catch (Exception e) {
-            return ZoneId.systemDefault();
-        }
-    }
+	private ZoneId safeZone(String zoneId) {
+		try {
+			return ZoneId.of(zoneId);
+		} catch (Exception e) {
+			return ZoneId.systemDefault();
+		}
+	}
 
     private boolean isBlank(String s) {
         return s == null || s.isBlank();
@@ -464,25 +562,25 @@ public class MetricsService {
 
     private long parseLongSafe(String s) {
         if (s == null || s.isBlank()) return 0;
-        try {
-            return Long.parseLong(s.replaceAll("\\D", ""));
-        } catch (Exception e) {
-            return 0;
-        }
-    }
+		try {
+			return Long.parseLong(s.replaceAll("\\D", ""));
+		} catch (Exception e) {
+			return 0;
+		}
+	}
 
     private String asString(Object v) {
         return v == null ? null : String.valueOf(v);
-    }
+	}
 
-    private Long asLong(Object v) {
-        if (v == null) return null;
-        if (v instanceof Number) return ((Number) v).longValue();
+	private Long asLong(Object v) {
+		if (v == null) return null;
+		if (v instanceof Number) return ((Number) v).longValue();
         try {
             return Long.parseLong(String.valueOf(v).replaceAll("\\D", ""));
         } catch (Exception e) {
-            return null;
-        }
+		return null;
+	}
     }
 
     // ==================== INNER CLASSES ====================
@@ -557,27 +655,28 @@ public class MetricsService {
         }
     }
 
-    public static class DurationRange {
-        private final Instant from;
-        private final Instant to;
+	public static class DurationRange {
+		private final Instant from;
+		private final Instant to;
 
-        public DurationRange(Instant from, Instant to) {
-            this.from = from;
-            this.to = to;
-        }
+		public DurationRange(Instant from, Instant to) {
+			this.from = from;
+			this.to = to;
+		}
 
-        public Instant from() {
-            return from;
-        }
+		public Instant from() {
+			return from;
+		}
 
-        public Instant to() {
-            return to;
-        }
+		public Instant to() {
+			return to;
+		}
 
-        public static DurationRange lastHours(int hours) {
-            Instant to = Instant.now();
-            Instant from = to.minusSeconds(hours * 3600L);
-            return new DurationRange(from, to);
-        }
-    }
+		public static DurationRange lastHours(int hours) {
+			Instant to = Instant.now();
+			Instant from = to.minusSeconds(hours * 3600L);
+			return new DurationRange(from, to);
+		}
+	}
 }
+

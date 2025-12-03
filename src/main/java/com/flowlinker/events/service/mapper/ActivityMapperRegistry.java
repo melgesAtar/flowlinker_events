@@ -36,6 +36,12 @@ public final class ActivityMapperRegistry {
         // Share
         registerExact("facebook.activity.share_batch", ActivityMappers::shareBatch);
         registerExact("facebook.activity.share.batch", ActivityMappers::shareBatch);
+        
+        // Instagram Direct Message
+        registerExact("instagram.activity.direct_message.sent", ActivityMappers::instagramDirectMessageSent);
+        registerExact("instagram.direct_message.sent", ActivityMappers::instagramDirectMessageSent);
+        registerExact("desktop.activity.direct_message.sent", ActivityMappers::instagramDirectMessageSent);
+        registerExact("desktop.activity.direct.message.sent", ActivityMappers::instagramDirectMessageSent);
 
         // Session
         registerExact("desktop.activity.session_started", ActivityMappers::sessionStarted);
@@ -54,6 +60,10 @@ public final class ActivityMapperRegistry {
         registerExact("facebook.activity.extraction.paused", ActivityMappers::extractionPaused);
         registerExact("facebook.activity.extraction.cancelled", ActivityMappers::extractionCancelled);
         registerExact("facebook.activity.extraction.completed", ActivityMappers::extractionCompleted);
+        
+        // Instagram Follower Extraction
+        registerExact("desktop.activity.instagram_follower_extraction_started", ActivityMappers::instagramFollowerExtractionStarted);
+        registerExact("web.activity.instagram_follower_extraction_started", ActivityMappers::instagramFollowerExtractionStarted);
 
         // Account
         registerExact("desktop.activity.social_media_account_created", ActivityMappers::accountCreated);
@@ -61,6 +71,8 @@ public final class ActivityMapperRegistry {
         registerExact("web.social.media.account_updated", ActivityMappers::accountUpdated);
         registerExact("desktop.activity.account_suspended", ActivityMappers::accountSuspended);
         registerExact("desktop.activity.account.suspended", ActivityMappers::accountSuspended);
+        registerExact("desktop.activity.social_media_account_suspended", ActivityMappers::accountSuspended);
+        registerExact("web.activity.social_media_account_suspended", ActivityMappers::accountSuspended);
         registerExact("desktop.activity.account_blocked", ActivityMappers::accountBlocked);
         registerExact("desktop.activity.account.blocked", ActivityMappers::accountBlocked);
 
@@ -84,6 +96,10 @@ public final class ActivityMapperRegistry {
         registerPattern(
                 type -> type.contains(".campaign.") && type.endsWith(".paused"),
                 ActivityMappers::campaignPaused
+        );
+        registerPattern(
+                type -> type.contains(".campaign.") && type.endsWith(".resumed"),
+                ActivityMappers::campaignResumed
         );
     }
 
