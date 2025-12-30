@@ -133,22 +133,19 @@ public class EventConsumerService {
 
 	@RabbitListener(queues = "${app.rabbit.queue.activity}")
 	public void onActivity(EnrichedEventDTO event) {
-		log.info("EVENTO RECEBIDO - fila=activity type={} customerId={} eventId={}",
-			event.getEventType(), event.getCustomerId(), event.getEventId());
+		log.info("Q[activity] type={} customerId={} eventId={}", event.getEventType(), event.getCustomerId(), event.getEventId());
 		handle(event);
 	}
 
 	@RabbitListener(queues = "${app.rabbit.queue.campaign}")
 	public void onCampaign(EnrichedEventDTO event) {
-		log.info("EVENTO RECEBIDO - fila=campaign type={} customerId={} eventId={}",
-			event.getEventType(), event.getCustomerId(), event.getEventId());
+		log.info("Q[campaign] type={} customerId={} eventId={}", event.getEventType(), event.getCustomerId(), event.getEventId());
 		handle(event);
 	}
 
 	@RabbitListener(queues = "${app.rabbit.queue.security}")
 	public void onSecurity(EnrichedEventDTO event) {
-		log.info("EVENTO RECEBIDO - fila=security type={} customerId={} eventId={}",
-			event.getEventType(), event.getCustomerId(), event.getEventId());
+		log.info("Q[security] type={} customerId={} eventId={}", event.getEventType(), event.getCustomerId(), event.getEventId());
 		handle(event);
 	}
 
@@ -158,7 +155,7 @@ public class EventConsumerService {
 		String account0 = p0 == null ? null : s(p0.get("account"));
 		String platform0 = p0 == null ? null : s(p0.get("platform"));
 		if (platform0 == null && p0 != null) platform0 = s(p0.get("source"));
-		log.info("INGEST REQUEST: type={} customerId={} deviceId={} ip={} account={} platform={} eventId={}",
+		log.debug("INGEST REQUEST: type={} customerId={} deviceId={} ip={} account={} platform={} eventId={}",
 			e.getEventType(), e.getCustomerId(), e.getDeviceId(), e.getIp(), account0, platform0, e.getEventId());
 
 		// Persiste sempre o evento bruto para trilha completa
@@ -323,18 +320,18 @@ public class EventConsumerService {
 			saveIgnoreDup(new SaveOp() { public void run() { activityAccountUpdatedRepository.save(d); } });
 		} else if ("desktop.activity.social_media_account_suspended".equals(type)
 				|| "web.activity.social_media_account_suspended".equals(type)) {
-			log.info("PROCESSANDO evento de suspensão de conta de rede social: eventId={}, type={}", e.getEventId(), type);
+			log.debug("PROCESSANDO evento de suspensão de conta de rede social: eventId={}, type={}", e.getEventId(), type);
 			ActivitySocialMediaAccountSuspendedDocument d = new ActivitySocialMediaAccountSuspendedDocument();
 			fillMeta(d, e);
 			d.setPlatform(s(p.get("platform")));
 			d.setAccount(s(p.get("account")));
 			d.setReason(s(p.get("reason")));
-			log.info("Dados do documento antes de salvar: platform={}, account={}, reason={}, eventId={}", 
+			log.debug("Dados do documento antes de salvar: platform={}, account={}, reason={}, eventId={}", 
 					d.getPlatform(), d.getAccount(), d.getReason(), d.getEventId());
 			saveIgnoreDup(new SaveOp() { 
 				public void run() { 
 					activitySocialMediaAccountSuspendedRepository.save(d);
-					log.info("Evento de suspensão SALVO com sucesso na collection activity_social_media_account_suspended: eventId={}", d.getEventId());
+					log.debug("Evento de suspensão SALVO na collection activity_social_media_account_suspended: eventId={}", d.getEventId());
 				} 
 			});
 		} else if ("desktop.activity.account_suspended".equals(type)) {

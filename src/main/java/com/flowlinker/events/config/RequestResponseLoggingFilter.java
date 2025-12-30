@@ -14,7 +14,6 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.util.Optional;
 
 @Component
 public class RequestResponseLoggingFilter extends OncePerRequestFilter {
@@ -43,13 +42,39 @@ public class RequestResponseLoggingFilter extends OncePerRequestFilter {
 	private void logExchange(ContentCachingRequestWrapper request, ContentCachingResponseWrapper response, long durationMs) {
 		String method = request.getMethod();
 		String uri = request.getRequestURI() + (request.getQueryString() != null ? "?" + request.getQueryString() : "");
+		String path = request.getRequestURI();
 		int status = response.getStatus();
 
-		String reqBody = getSafeBody(request.getContentAsByteArray(), getCharsetFromContentType(request.getContentType()));
-		String resBody = getSafeBody(response.getContentAsByteArray(), getCharsetFromContentType(response.getContentType()));
+		String reqBody = null;
+		String resBody = null;
 
-		if (log.isInfoEnabled()) {
-			log.info("HTTP EXCHANGE: method={} uri=\"{}\" status={} durationMs={} requestBody={} responseBody={}",
+		// Logs mínimos para endpoints de métricas (sempre uma linha em INFO para 2xx/3xx)
+		if (path.startsWith("/metrics")) {
+			int statusClass = status / 100;
+			if (statusClass == 2 || statusClass == 3) {
+				if (log.isInfoEnabled()) {
+					log.info("METRICS: method={} uri=\"{}\" status={} durationMs={}", method, uri, status, durationMs);
+				}
+				return;
+			}
+			// Para 4xx/5xx aplica política geral abaixo (WARN/ERROR)
+		}
+
+		// Para reduzir ruído: só loga corpos em DEBUG; 4xx em WARN e 5xx em ERROR, sem corpo
+		if (status >= 500) {
+			if (log.isErrorEnabled()) {
+				log.error("HTTP EXCHANGE: method={} uri=\"{}\" status={} durationMs={}",
+						method, uri, status, durationMs);
+			}
+		} else if (status >= 400) {
+			if (log.isWarnEnabled()) {
+				log.warn("HTTP EXCHANGE: method={} uri=\"{}\" status={} durationMs={}",
+						method, uri, status, durationMs);
+			}
+		} else if (log.isDebugEnabled()) {
+			reqBody = getSafeBody(request.getContentAsByteArray(), getCharsetFromContentType(request.getContentType()));
+			resBody = getSafeBody(response.getContentAsByteArray(), getCharsetFromContentType(response.getContentType()));
+			log.debug("HTTP EXCHANGE: method={} uri=\"{}\" status={} durationMs={} requestBody={} responseBody={}",
 					method, uri, status, durationMs, reqBody, resBody);
 		}
 	}

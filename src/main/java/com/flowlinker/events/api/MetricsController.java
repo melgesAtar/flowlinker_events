@@ -2,6 +2,7 @@ package com.flowlinker.events.api;
 
 import com.flowlinker.events.service.MetricsService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -13,6 +14,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/metrics")
+@PreAuthorize("hasRole('METRICS')")
 public class MetricsController {
 
 	private final MetricsService metricsService;

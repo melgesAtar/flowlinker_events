@@ -27,6 +27,8 @@ app:
       activity: ${RABBIT_QUEUE_ACTIVITY:events.activity}
       campaign: ${RABBIT_QUEUE_CAMPAIGN:events.campaign}
       security: ${RABBIT_QUEUE_SECURITY:events.security}
+  security:
+    metricsApiKey: ${METRICS_API_KEY:Z5Z693LlxChLXZ4iiJx6LEmqmY03dcQU}
 
 management:
   endpoints:
@@ -39,9 +41,11 @@ management:
 
 logging:
   level:
-    root: INFO
-    org.springframework.amqp: INFO
-    org.springframework.data.mongodb: INFO
-    com.flowlinker.events: DEBUG
-    org.springframework.web.filter.CommonsRequestLoggingFilter: DEBUG
+    root: WARN
+    org.springframework: WARN
+    org.springframework.amqp: WARN
+    org.springframework.data.mongodb: WARN
+    org.mongodb.driver: WARN
+    com.flowlinker.events: INFO
+    org.springframework.web.filter.CommonsRequestLoggingFilter: OFF
 
