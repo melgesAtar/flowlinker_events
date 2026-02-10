@@ -2,8 +2,16 @@ package com.flowlinker.events.service;
 
 import com.flowlinker.events.persistence.EventDocument;
 import com.flowlinker.events.projection.activity.*;
+import com.flowlinker.events.projection.campaign.CampaignCompletedDocument;
+import com.flowlinker.events.projection.campaign.CampaignProgressDocument;
+import com.flowlinker.events.projection.campaign.CampaignStartedDocument;
 import com.flowlinker.events.service.mapper.ActivityMapperRegistry;
 import com.flowlinker.events.service.mapper.EventContext;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -13,11 +21,13 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayOutputStream;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -677,6 +687,163 @@ public class MetricsService {
 			Instant from = to.minusSeconds(hours * 3600L);
 			return new DurationRange(from, to);
 		}
-	}
-}
 
+        public static DurationRange between(Instant from, Instant to) {
+            if (from == null || to == null) throw new IllegalArgumentException("start and end must be provided");
+            if (from.isAfter(to)) throw new IllegalArgumentException("start must be before end");
+            long days = ChronoUnit.DAYS.between(from, to);
+            if (days > 60) throw new IllegalArgumentException("O período máximo permitido é de 60 dias");
+            return new DurationRange(from, to);
+        }
+	}
+
+    // ==================== CAMPAIGNS DETAILS ====================
+
+    public List<Map<String, Object>> listCampaignsWithActivities(DurationRange range, String customerId, String zoneId) {
+        ZoneId zone = safeZone(zoneId);
+        Map<Long, Map<String, Object>> campaigns = new LinkedHashMap<>();
+
+        try {
+            Query common = timeRangeQuery(customerId, range).with(Sort.by(Sort.Direction.DESC, "eventAt"));
+
+            for (CampaignStartedDocument d : mongoTemplate.find(common, CampaignStartedDocument.class)) {
+                Long cid = d.getCampaignId();
+                if (cid == null) continue;
+                Map<String, Object> c = campaigns.computeIfAbsent(cid, k -> new LinkedHashMap<>());
+                c.putIfAbsent("campaignId", cid);
+                c.putIfAbsent("platform", d.getPlatform());
+                c.putIfAbsent("campaignType", d.getCampaignType());
+                c.putIfAbsent("startedAt", d.getEventAt());
+                c.putIfAbsent("startedAtLocal", d.getEventAt() != null ? d.getEventAt().atZone(zone).toString() : null);
+                c.putIfAbsent("startedEventId", d.getEventId());
+                c.putIfAbsent("total", d.getTotal());
+            }
+
+            for (CampaignProgressDocument d : mongoTemplate.find(common, CampaignProgressDocument.class)) {
+                Long cid = d.getCampaignId();
+                if (cid == null) continue;
+                Map<String, Object> c = campaigns.computeIfAbsent(cid, k -> new LinkedHashMap<>());
+                Object existing = c.get("lastProgressAt");
+                if (existing == null || ((Instant) existing).isBefore(d.getEventAt())) {
+                    c.put("lastProgressAt", d.getEventAt());
+                    c.put("lastProgressAtLocal", d.getEventAt() != null ? d.getEventAt().atZone(zone).toString() : null);
+                    c.put("lastProcessedIndex", d.getLastProcessedIndex());
+                    c.put("progressEventId", d.getEventId());
+                }
+            }
+
+            for (CampaignCompletedDocument d : mongoTemplate.find(common, CampaignCompletedDocument.class)) {
+                Long cid = d.getCampaignId();
+                if (cid == null) continue;
+                Map<String, Object> c = campaigns.computeIfAbsent(cid, k -> new LinkedHashMap<>());
+                c.put("completedAt", d.getEventAt());
+                c.put("completedAtLocal", d.getEventAt() != null ? d.getEventAt().atZone(zone).toString() : null);
+                c.put("completedEventId", d.getEventId());
+                c.putIfAbsent("total", d.getTotal());
+            }
+        } catch (DataAccessException e) {
+            log.warn("Falha ao consultar projeções de campanha", e);
+        }
+
+        // tenta extrair campaignName de eventos brutos quando disponível
+        for (Long cid : new ArrayList<>(campaigns.keySet())) {
+            Map<String, Object> c = campaigns.get(cid);
+            try {
+                Query q = Query.query(Criteria.where("customerId").is(customerId)
+                        .and("eventAt").gte(range.from()).lte(range.to())
+                        .and("payload.campaignId").is(cid))
+                        .with(Sort.by(Sort.Direction.DESC, "eventAt"))
+                        .limit(5);
+
+                for (EventDocument ev : mongoTemplate.find(q, EventDocument.class)) {
+                    Map<String, Object> p = ev.getPayload();
+                    if (p == null) continue;
+                    String name = Optional.ofNullable(asString(p.get("name")))
+                            .or(() -> Optional.ofNullable(asString(p.get("campaignName"))))
+                            .or(() -> Optional.ofNullable(asString(p.get("title"))))
+                            .orElse(null);
+                    if (name != null) c.putIfAbsent("campaignName", name);
+                    if (c.get("campaignName") != null) break;
+                }
+            } catch (DataAccessException e) {
+                log.debug("Falha ao buscar nome da campanha em eventos brutos para {}", cid, e);
+            }
+        }
+
+        // associa messages e shares por campaignId
+        for (Map.Entry<Long, Map<String, Object>> entry : campaigns.entrySet()) {
+            Long cid = entry.getKey();
+            Map<String, Object> c = entry.getValue();
+
+            List<Map<String, Object>> messages = new ArrayList<>();
+            try {
+                Query mq = Query.query(Criteria.where("customerId").is(customerId)
+                        .and("campaignId").is(cid)
+                        .and("eventAt").gte(range.from()).lte(range.to()))
+                        .with(Sort.by(Sort.Direction.DESC, "eventAt"));
+                for (ActivityInstagramDirectMessageSentDocument d : mongoTemplate.find(mq, ActivityInstagramDirectMessageSentDocument.class)) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("eventId", d.getEventId());
+                    m.put("eventAt", d.getEventAt());
+                    m.put("eventAtLocal", d.getEventAt() != null ? d.getEventAt().atZone(zone).toString() : null);
+                    m.put("account", d.getAccount());
+                    m.put("recipientUsername", d.getRecipientUsername());
+                    m.put("recipientId", d.getRecipientId());
+                    m.put("messagePreview", d.getMessagePreview());
+                    m.put("source", d.getSource());
+                    m.put("deviceId", d.getDeviceId());
+                    m.put("ip", d.getIp());
+                    messages.add(m);
+                }
+            } catch (DataAccessException ex) {
+                log.warn("Falha ao consultar mensagens diretas para campanha {}", cid, ex);
+            }
+
+            List<Map<String, Object>> shares = new ArrayList<>();
+            try {
+                // procura eventos brutos de share com payload.campaignId
+                Query sq = Query.query(Criteria.where("customerId").is(customerId)
+                        .and("eventAt").gte(range.from()).lte(range.to())
+                        .and("eventType").in("facebook.activity.share_batch", "facebook.activity.share.batch",
+                                "instagram.activity.share_batch", "instagram.activity.share.batch")
+                        .and("payload.campaignId").is(cid))
+                        .with(Sort.by(Sort.Direction.DESC, "eventAt"));
+
+                for (EventDocument ev : mongoTemplate.find(sq, EventDocument.class)) {
+                    Map<String, Object> p = ev.getPayload();
+                    if (p == null) continue;
+                    Map<String, Object> s = new LinkedHashMap<>();
+                    s.put("eventId", ev.getEventId());
+                    s.put("eventAt", ev.getEventAt());
+                    s.put("eventAtLocal", ev.getEventAt() != null ? ev.getEventAt().atZone(zone).toString() : null);
+                    s.put("account", asString(p.get("account")));
+                    s.put("groupName", asString(p.get("groupName")));
+                    s.put("groupUrl", asString(p.get("groupUrl")));
+                    s.put("groupMembers", asString(p.get("groupMembers")));
+                    s.put("post", asString(p.get("post")));
+                    shares.add(s);
+                }
+            } catch (DataAccessException ex) {
+                log.warn("Falha ao consultar shares relacionados a campanha {}", cid, ex);
+            }
+
+            c.put("directMessages", messages);
+            c.put("shares", shares);
+            c.put("directMessagesCount", messages.size());
+            c.put("sharesCount", shares.size());
+        }
+
+        return campaigns.values().stream()
+                .sorted((a, b) -> {
+                    Instant ia = (Instant) a.getOrDefault("startedAt", a.get("lastProgressAt"));
+                    Instant ib = (Instant) b.getOrDefault("startedAt", b.get("lastProgressAt"));
+                    if (ia == null && ib == null) return 0;
+                    if (ia == null) return 1;
+                    if (ib == null) return -1;
+                    return ib.compareTo(ia);
+                })
+                .toList();
+    }
+
+
+}

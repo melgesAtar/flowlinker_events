@@ -1,6 +1,8 @@
 package com.flowlinker.events.api;
 
 import com.flowlinker.events.service.MetricsService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -8,6 +10,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.*;
+import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -201,6 +205,77 @@ public class MetricsController {
 			})
 			.orElseGet(() -> ResponseEntity.ok(Map.of("message", "Conta não está bloqueada ou nunca foi bloqueada")));
 	}
+
+	@GetMapping("/campaigns/details")
+	public ResponseEntity<?> campaignsDetails(
+		@RequestParam(name = "customerId") String customerId,
+		@RequestParam(name = "start") String start,
+		@RequestParam(name = "end") String end,
+		@RequestParam(name = "tz", defaultValue = "UTC") String tz,
+		@RequestParam(name = "page", defaultValue = "0") int page,
+		@RequestParam(name = "size", defaultValue = "20") int size
+	) {
+		ZoneId zone = safeZone(tz);
+		try {
+			if (page < 0) return ResponseEntity.badRequest().body(Map.of("message", "page must be >= 0"));
+			if (size <= 0 || size > 1000) return ResponseEntity.badRequest().body(Map.of("message", "size must be between 1 and 1000"));
+
+			Instant from = parseStart(start, zone);
+			Instant to = parseEnd(end, zone);
+			// valida e cria o DurationRange (pode lançar IllegalArgumentException)
+			MetricsService.DurationRange range = MetricsService.DurationRange.between(from, to);
+			List<Map<String, Object>> all = metricsService.listCampaignsWithActivities(range, customerId, zone.getId());
+
+			int total = all.size();
+			int fromIndex = page * size;
+			if (fromIndex >= total) {
+				Map<String, Object> body = new LinkedHashMap<>();
+				body.put("total", total);
+				body.put("page", page);
+				body.put("size", size);
+				body.put("items", List.of());
+				return ResponseEntity.ok(body);
+			}
+			int toIndex = Math.min(fromIndex + size, total);
+			List<Map<String, Object>> items = all.subList(fromIndex, toIndex);
+
+			Map<String, Object> body = new LinkedHashMap<>();
+			body.put("total", total);
+			body.put("page", page);
+			body.put("size", size);
+			body.put("items", items);
+			return ResponseEntity.ok(body);
+		} catch (DateTimeParseException | IllegalArgumentException e) {
+			return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+		}
+	}
+
+	private Instant parseStart(String s, ZoneId zone) {
+		try {
+			// tenta ISO_INSTANT
+			return Instant.parse(s);
+		} catch (DateTimeParseException e) {
+			// tenta yyyy-MM-dd como inicio do dia
+			LocalDate d = LocalDate.parse(s);
+			return d.atStartOfDay(zone).toInstant();
+		}
+	}
+
+	private Instant parseEnd(String s, ZoneId zone) {
+		try {
+			return Instant.parse(s);
+		} catch (DateTimeParseException e) {
+			LocalDate d = LocalDate.parse(s);
+			// fim do dia
+			return d.atTime(LocalTime.MAX).atZone(zone).toInstant();
+		}
+	}
+
+	private ZoneId safeZone(String zoneId) {
+		try {
+			return ZoneId.of(zoneId);
+		} catch (Exception e) {
+			return ZoneId.of("UTC");
+		}
+	}
 }
-
-
