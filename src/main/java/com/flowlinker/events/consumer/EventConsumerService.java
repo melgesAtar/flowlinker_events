@@ -38,6 +38,7 @@ import org.springframework.beans.factory.annotation.Value;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
+import java.time.Instant;
 
 @Service
 public class EventConsumerService {
@@ -68,6 +69,7 @@ public class EventConsumerService {
 	private final CampaignStartedRepository campaignStartedRepository;
 	private final CampaignProgressRepository campaignProgressRepository;
 	private final CampaignCompletedRepository campaignCompletedRepository;
+	private final ActivityCommentRepository activityCommentRepository;
 
 	@Value("${app.rabbit.queue.activity}")
 	private String activityQueueName;
@@ -100,7 +102,8 @@ public class EventConsumerService {
 		ActivityDeviceRenamedRepository activityDeviceRenamedRepository,
 		CampaignStartedRepository campaignStartedRepository,
 		CampaignProgressRepository campaignProgressRepository,
-		CampaignCompletedRepository campaignCompletedRepository
+		CampaignCompletedRepository campaignCompletedRepository,
+		ActivityCommentRepository activityCommentRepository
 	) {
 		this.eventRepository = eventRepository;
 		this.securityLoginSuccessRepository = securityLoginSuccessRepository;
@@ -126,6 +129,7 @@ public class EventConsumerService {
 		this.campaignStartedRepository = campaignStartedRepository;
 		this.campaignProgressRepository = campaignProgressRepository;
 		this.campaignCompletedRepository = campaignCompletedRepository;
+		this.activityCommentRepository = activityCommentRepository;
 
 		log.info("RabbitMQ consumidor configurado para filas: activity='{}', campaign='{}', security='{}'",
 			activityQueueName, campaignQueueName, securityQueueName);
@@ -194,6 +198,73 @@ public class EventConsumerService {
 		if (p == null) {
 			p = Collections.emptyMap();
 		}
+		// Novo: tratamento de eventos de comentário
+		if ("facebook.activity.comment".equals(type) || "instagram.activity.comment".equals(type) || "desktop.activity.comment".equals(type) || (type != null && type.endsWith(".activity.comment"))) {
+			ActivityCommentDocument d = new ActivityCommentDocument();
+			fillMeta(d, e);
+			String platform = s(p.get("platform"));
+			if (platform == null) platform = s(p.get("source"));
+			d.setPlatform(platform);
+			d.setAccount(s(p.get("account")));
+			d.setCampaignId(l(p.get("campaignId")));
+			d.setCampaignName(s(p.get("campaignName")));
+			Object successObj = p.get("success");
+			if (successObj == null) {
+				d.setSuccess(null);
+			} else if (successObj instanceof Boolean) {
+				d.setSuccess((Boolean) successObj);
+			} else {
+				d.setSuccess(Boolean.valueOf(String.valueOf(successObj)));
+			}
+			d.setOrderIndex(i(p.get("orderIndex")));
+			d.setCommentText(s(p.get("commentText")));
+			d.setErrorReason(s(p.get("errorReason")));
+			// fallback: common alternative keys for error reason
+			if ((d.getErrorReason() == null || d.getErrorReason().isBlank()) && p != null) {
+				Object alt = p.get("error_reason");
+				if (alt == null) alt = p.get("error");
+				if (alt instanceof Map) {
+					@SuppressWarnings("unchecked")
+					Map<String,Object> em = (Map<String,Object>) alt;
+					if (em.get("reason") != null) d.setErrorReason(String.valueOf(em.get("reason")));
+					else if (em.get("code") != null) d.setErrorReason(String.valueOf(em.get("code")));
+					else if (em.get("errorReason") != null) d.setErrorReason(String.valueOf(em.get("errorReason")));
+				} else if (alt != null) {
+					d.setErrorReason(String.valueOf(alt));
+				} else if (p.get("errorCode") != null) {
+					d.setErrorReason(String.valueOf(p.get("errorCode")));
+				} else if (p.get("errorReasonCode") != null) {
+					d.setErrorReason(String.valueOf(p.get("errorReasonCode")));
+				}
+			}
+			// orderIndex and commentText already set earlier; keep errorReason from fallback above
+			// set remaining fields
+			d.setErrorMessage(s(p.get("errorMessage")));
+			Object retry = p.get("retryable");
+			if (retry != null) d.setRetryable(Boolean.valueOf(String.valueOf(retry)));
+			// garante que o campo errorReason exista (persistido) mesmo quando nulo — salva como string vazia
+			if (d.getErrorReason() == null) d.setErrorReason("");
+			saveIgnoreDup(new SaveOp() { public void run() { activityCommentRepository.save(d); } });
+
+			// Se sucesso e orderIndex presente, gravar um CampaignProgressDocument para refletir progresso
+			if (Boolean.TRUE.equals(d.getSuccess()) && d.getOrderIndex() != null && d.getCampaignId() != null) {
+				CampaignProgressDocument pd = new CampaignProgressDocument();
+				pd.setEventId(e.getEventId());
+				pd.setEventAt(e.getEventAt());
+				pd.setReceivedAt(e.getReceivedAt());
+				pd.setCustomerId(String.valueOf(e.getCustomerId()));
+				pd.setDeviceId(String.valueOf(e.getDeviceId()));
+				pd.setIp(e.getIp());
+				pd.setPlatform(platform != null ? platform.toUpperCase() : null);
+				pd.setEventType(type);
+				pd.setCampaignId(d.getCampaignId());
+				pd.setLastProcessedIndex(d.getOrderIndex());
+				pd.setTotal(null);
+				saveIgnoreDup(new SaveOp() { public void run() { campaignProgressRepository.save(pd); } });
+			}
+			return;
+		}
+
 		if ("security.auth.login".equals(type) || "auth.security.login".equals(type)) {
 			SecurityLoginSuccessDocument d = new SecurityLoginSuccessDocument();
 			fillMeta(d, e);
@@ -318,8 +389,7 @@ public class EventConsumerService {
 				d.setChanges(null);
 			}
 			saveIgnoreDup(new SaveOp() { public void run() { activityAccountUpdatedRepository.save(d); } });
-		} else if ("desktop.activity.social_media_account_suspended".equals(type)
-				|| "web.activity.social_media_account_suspended".equals(type)) {
+		} else if ("desktop.activity.social_media_account_suspended".equals(type) || "web.activity.social_media_account_suspended".equals(type)) {
 			log.debug("PROCESSANDO evento de suspensão de conta de rede social: eventId={}, type={}", e.getEventId(), type);
 			ActivitySocialMediaAccountSuspendedDocument d = new ActivitySocialMediaAccountSuspendedDocument();
 			fillMeta(d, e);
@@ -603,7 +673,8 @@ public class EventConsumerService {
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityExtractionCompletedDocument) {
-			ActivityExtractionCompletedDocument d = (ActivityExtractionCompletedDocument) target;
+			ActivityExtractionCompletedDocument d = new ActivityExtractionCompletedDocument();
+			fillMeta(d, e);
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityInstagramFollowerExtractionStartedDocument) {
@@ -614,6 +685,44 @@ public class EventConsumerService {
 			ActivityInstagramDirectMessageSentDocument d = (ActivityInstagramDirectMessageSentDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+		} else if (target instanceof ActivityCommentDocument) {
+			ActivityCommentDocument d = (ActivityCommentDocument) target;
+			// populate from top-level first
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
+			// fallback: try payload values when top-level values are missing
+			Map<String, Object> p = e.getPayload();
+			if (p != null) {
+				if ((d.getEventId() == null || d.getEventId().isBlank()) && p.get("eventId") != null) {
+					d.setEventId(s(p.get("eventId")));
+				}
+				if (d.getEventAt() == null && p.get("eventAt") != null) {
+					Object ev = p.get("eventAt");
+					if (ev instanceof Instant) d.setEventAt((Instant) ev);
+					else {
+						try { d.setEventAt(Instant.parse(String.valueOf(ev))); } catch (Exception ex) { /* ignore */ }
+					}
+				}
+				if (d.getReceivedAt() == null && p.get("receivedAt") != null) {
+					Object rv = p.get("receivedAt");
+					if (rv instanceof Instant) d.setReceivedAt((Instant) rv);
+					else {
+						try { d.setReceivedAt(Instant.parse(String.valueOf(rv))); } catch (Exception ex) { /* ignore */ }
+					}
+				}
+				if ((d.getCustomerId() == null || d.getCustomerId().isBlank()) && p.get("customerId") != null) {
+					d.setCustomerId(String.valueOf(p.get("customerId")));
+				}
+				if ((d.getDeviceId() == null || d.getDeviceId().isBlank()) && p.get("deviceId") != null) {
+					d.setDeviceId(String.valueOf(p.get("deviceId")));
+				}
+				if ((d.getIp() == null || d.getIp().isBlank()) && p.get("ip") != null) {
+					d.setIp(String.valueOf(p.get("ip")));
+				}
+			}
+			// debug log to help troubleshooting missing fields
+			log.debug("ActivityCommentDocument meta populated: eventId={} eventAt={} receivedAt={} customerId={} deviceId={} ip={} account={} campaignId={}",
+					d.getEventId(), d.getEventAt(), d.getReceivedAt(), d.getCustomerId(), d.getDeviceId(), d.getIp(), d.getAccount(), d.getCampaignId());
 		} else if (target instanceof CampaignStartedDocument) {
 			CampaignStartedDocument d = (CampaignStartedDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
@@ -699,5 +808,4 @@ public class EventConsumerService {
 		}
 	}
 }
-
 

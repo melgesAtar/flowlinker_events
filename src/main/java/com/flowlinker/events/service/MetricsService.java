@@ -820,22 +820,52 @@ public class MetricsService {
                 log.warn("Falha ao consultar shares relacionados a campanha {}", cid, ex);
             }
 
+            // adiciona comentários relacionados à campanha (activity_comment)
+            List<Map<String, Object>> comments = new ArrayList<>();
+            try {
+                Query cq = Query.query(Criteria.where("customerId").is(customerId)
+                        .and("campaignId").is(cid)
+                        .and("eventAt").gte(range.from()).lte(range.to()))
+                        .with(Sort.by(Sort.Direction.DESC, "eventAt"));
+                for (ActivityCommentDocument d : mongoTemplate.find(cq, ActivityCommentDocument.class)) {
+                    Map<String, Object> cm = new LinkedHashMap<>();
+                    cm.put("eventId", d.getEventId());
+                    cm.put("eventAt", d.getEventAt());
+                    cm.put("eventAtLocal", d.getEventAt() != null ? d.getEventAt().atZone(zone).toString() : null);
+                    cm.put("account", d.getAccount());
+                    cm.put("platform", d.getPlatform());
+                    cm.put("success", d.getSuccess());
+                    cm.put("orderIndex", d.getOrderIndex());
+                    cm.put("commentText", d.getCommentText());
+                    cm.put("errorReason", d.getErrorReason());
+                    cm.put("errorMessage", d.getErrorMessage());
+                    cm.put("retryable", d.getRetryable());
+                    cm.put("deviceId", d.getDeviceId());
+                    cm.put("ip", d.getIp());
+                    comments.add(cm);
+                }
+            } catch (DataAccessException ex) {
+                log.warn("Falha ao consultar comentários relacionados a campanha {}", cid, ex);
+            }
+
             c.put("directMessages", messages);
             c.put("shares", shares);
             c.put("directMessagesCount", messages.size());
             c.put("sharesCount", shares.size());
+            c.put("comments", comments);
+            c.put("commentsCount", comments.size());
         }
 
-        return campaigns.values().stream()
-                .sorted((a, b) -> {
-                    Instant ia = (Instant) a.getOrDefault("startedAt", a.get("lastProgressAt"));
-                    Instant ib = (Instant) b.getOrDefault("startedAt", b.get("lastProgressAt"));
-                    if (ia == null && ib == null) return 0;
-                    if (ia == null) return 1;
-                    if (ib == null) return -1;
-                    return ib.compareTo(ia);
-                })
-                .toList();
+         return campaigns.values().stream()
+                 .sorted((a, b) -> {
+                     Instant ia = (Instant) a.getOrDefault("startedAt", a.get("lastProgressAt"));
+                     Instant ib = (Instant) b.getOrDefault("startedAt", b.get("lastProgressAt"));
+                     if (ia == null && ib == null) return 0;
+                     if (ia == null) return 1;
+                     if (ib == null) return -1;
+                     return ib.compareTo(ia);
+                 })
+                 .toList();
     }
 
 

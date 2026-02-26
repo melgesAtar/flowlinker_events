@@ -1,6 +1,11 @@
 package com.flowlinker.events.api;
 
 import com.flowlinker.events.service.MetricsService;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -10,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.ByteArrayOutputStream;
 import java.time.*;
 import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
@@ -213,7 +219,8 @@ public class MetricsController {
 		@RequestParam(name = "end") String end,
 		@RequestParam(name = "tz", defaultValue = "UTC") String tz,
 		@RequestParam(name = "page", defaultValue = "0") int page,
-		@RequestParam(name = "size", defaultValue = "20") int size
+		@RequestParam(name = "size", defaultValue = "20") int size,
+		@RequestParam(name = "format", defaultValue = "json") String format
 	) {
 		ZoneId zone = safeZone(tz);
 		try {
@@ -225,6 +232,15 @@ public class MetricsController {
 			// valida e cria o DurationRange (pode lançar IllegalArgumentException)
 			MetricsService.DurationRange range = MetricsService.DurationRange.between(from, to);
 			List<Map<String, Object>> all = metricsService.listCampaignsWithActivities(range, customerId, zone.getId());
+
+			if ("xlsx".equalsIgnoreCase(format)) {
+				// gera planilha completa (sem paginação)
+				byte[] bytes = buildCampaignsXlsx(all);
+				HttpHeaders headers = new HttpHeaders();
+				headers.set(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=campaigns_details.xlsx");
+				headers.setContentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+				return ResponseEntity.ok().headers(headers).body(bytes);
+			}
 
 			int total = all.size();
 			int fromIndex = page * size;
@@ -248,6 +264,117 @@ public class MetricsController {
 		} catch (DateTimeParseException | IllegalArgumentException e) {
 			return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
 		}
+	}
+
+	private byte[] buildCampaignsXlsx(List<Map<String, Object>> campaigns) {
+		try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+			Sheet sCampaigns = wb.createSheet("campaigns");
+			Sheet sMessages = wb.createSheet("directMessages");
+			Sheet sShares = wb.createSheet("shares");
+
+			// header campaigns
+			Row h = sCampaigns.createRow(0);
+			String[] ch = new String[] {"campaignId", "campaignName", "platform", "campaignType", "startedAt", "startedAtLocal", "lastProgressAt", "lastProgressAtLocal", "completedAt", "completedAtLocal", "total", "directMessagesCount", "sharesCount"};
+			for (int i = 0; i < ch.length; i++) { Cell c = h.createCell(i); c.setCellValue(ch[i]); }
+
+			int rowIdx = 1;
+			int msgRow = 1; // start from 1 because 0 is header
+			int shareRow = 1;
+			// headers messages
+			Row mh = sMessages.createRow(0);
+			String[] mhc = new String[] {"campaignId", "eventId", "eventAt", "eventAtLocal", "account", "recipientUsername", "recipientId", "messagePreview", "source", "deviceId", "ip"};
+			for (int i = 0; i < mhc.length; i++) { mh.createCell(i).setCellValue(mhc[i]); }
+			// headers shares
+			Row sh = sShares.createRow(0);
+			String[] shc = new String[] {"campaignId", "eventId", "eventAt", "eventAtLocal", "account", "groupName", "groupUrl", "groupMembers", "post"};
+			for (int i = 0; i < shc.length; i++) { sh.createCell(i).setCellValue(shc[i]); }
+
+			for (Map<String, Object> c : campaigns) {
+				Row r = sCampaigns.createRow(rowIdx++);
+				int ci = 0;
+				createCell(r, ci++, c.get("campaignId"));
+				createCell(r, ci++, c.get("campaignName"));
+				createCell(r, ci++, c.get("platform"));
+				createCell(r, ci++, c.get("campaignType"));
+				createCell(r, ci++, c.get("startedAt"));
+				createCell(r, ci++, c.get("startedAtLocal"));
+				createCell(r, ci++, c.get("lastProgressAt"));
+				createCell(r, ci++, c.get("lastProgressAtLocal"));
+				createCell(r, ci++, c.get("completedAt"));
+				createCell(r, ci++, c.get("completedAtLocal"));
+				createCell(r, ci++, c.get("total"));
+				createCell(r, ci++, c.get("directMessagesCount"));
+				createCell(r, ci++, c.get("sharesCount"));
+
+				// direct messages
+				Object dmObj = c.get("directMessages");
+				if (dmObj instanceof List) {
+					List<?> dms = (List<?>) dmObj;
+					for (Object o : dms) {
+						if (!(o instanceof Map)) continue;
+						Map<?, ?> m = (Map<?, ?>) o;
+						Row mr = sMessages.createRow(msgRow++);
+						int mi = 0;
+						createCell(mr, mi++, c.get("campaignId"));
+						createCell(mr, mi++, m.get("eventId"));
+						createCell(mr, mi++, m.get("eventAt"));
+						createCell(mr, mi++, m.get("eventAtLocal"));
+						createCell(mr, mi++, m.get("account"));
+						createCell(mr, mi++, m.get("recipientUsername"));
+						createCell(mr, mi++, m.get("recipientId"));
+						createCell(mr, mi++, m.get("messagePreview"));
+						createCell(mr, mi++, m.get("source"));
+						createCell(mr, mi++, m.get("deviceId"));
+						createCell(mr, mi++, m.get("ip"));
+					}
+				}
+
+				// shares
+				Object shObj = c.get("shares");
+				if (shObj instanceof List) {
+					List<?> shs = (List<?>) shObj;
+					for (Object o : shs) {
+						if (!(o instanceof Map)) continue;
+						Map<?, ?> s = (Map<?, ?>) o;
+						Row sr = sShares.createRow(shareRow++);
+						int si = 0;
+						createCell(sr, si++, c.get("campaignId"));
+						createCell(sr, si++, s.get("eventId"));
+						createCell(sr, si++, s.get("eventAt"));
+						createCell(sr, si++, s.get("eventAtLocal"));
+						createCell(sr, si++, s.get("account"));
+						createCell(sr, si++, s.get("groupName"));
+						createCell(sr, si++, s.get("groupUrl"));
+						createCell(sr, si++, s.get("groupMembers"));
+						createCell(sr, si++, s.get("post"));
+					}
+				}
+			}
+
+			// autosize columns for sheets (limit columns to a reasonable number)
+			for (int i = 0; i < ch.length; i++) sCampaigns.autoSizeColumn(i);
+			for (int i = 0; i < mhc.length; i++) sMessages.autoSizeColumn(i);
+			for (int i = 0; i < shc.length; i++) sShares.autoSizeColumn(i);
+
+			wb.write(out);
+			return out.toByteArray();
+		} catch (Exception e) {
+			throw new RuntimeException("Failed to build XLSX", e);
+		}
+	}
+
+	private void createCell(Row r, int idx, Object v) {
+		Cell c = r.createCell(idx);
+		if (v == null) { c.setBlank(); return; }
+		if (v instanceof Number) {
+			c.setCellValue(((Number) v).doubleValue());
+			return;
+		}
+		if (v instanceof Instant) {
+			c.setCellValue(v.toString());
+			return;
+		}
+		c.setCellValue(String.valueOf(v));
 	}
 
 	private Instant parseStart(String s, ZoneId zone) {
