@@ -455,11 +455,8 @@ public class EventConsumerService {
 		} else if ("facebook.activity.extraction.completed".equals(type)) {
 			ActivityExtractionCompletedDocument d = new ActivityExtractionCompletedDocument();
 			fillMeta(d, e);
-			d.setPlatform(s(p.get("platform")));
-			d.setKeywords(s(p.get("keywords")));
-			d.setTotalGroups(l(p.get("totalGroups")));
-			d.setTotalMembers(l(p.get("totalMembers")));
-			saveIgnoreDup(new SaveOp() { public void run() { activityExtractionCompletedRepository.save(d); } });
+			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
+			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if ("desktop.activity.instagram_follower_extraction_started".equals(type)
 				|| "web.activity.instagram_follower_extraction_started".equals(type)) {
 			ActivityInstagramFollowerExtractionStartedDocument d = new ActivityInstagramFollowerExtractionStartedDocument();
@@ -673,8 +670,7 @@ public class EventConsumerService {
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityExtractionCompletedDocument) {
-			ActivityExtractionCompletedDocument d = new ActivityExtractionCompletedDocument();
-			fillMeta(d, e);
+			ActivityExtractionCompletedDocument d = (ActivityExtractionCompletedDocument) target;
 			d.setEventId(e.getEventId()); d.setEventAt(e.getEventAt()); d.setReceivedAt(e.getReceivedAt());
 			d.setCustomerId(e.getCustomerId()); d.setDeviceId(e.getDeviceId()); d.setIp(e.getIp());
 		} else if (target instanceof ActivityInstagramFollowerExtractionStartedDocument) {
